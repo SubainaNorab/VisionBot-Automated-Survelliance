@@ -46,3 +46,4 @@ app.*.map.json
 
 # model
 *tflite
+detectapp/assets/*.tflite
