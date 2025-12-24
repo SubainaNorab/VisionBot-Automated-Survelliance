@@ -1,373 +1,213 @@
-import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';
-import 'package:camera/camera.dart';
-import 'camera.dart';
-import 'face_detector.dart';
-import 'face_verification.dart';
-import 'model/person.dart';
+import "package:flutter/material.dart";
+import "package:firebase_core/firebase_core.dart";
+import "camera.dart";
+import "face_Detector.dart";
+import "face_verification.dart";
+import "package:camera/camera.dart";
+import "firebase_options.dart";
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Initialize Firebase
-  print('🔥 Initializing Firebase...');
-  await Firebase.initializeApp();
-  print('✅ Firebase initialized');
-
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Car Face Recognition',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: Colors.black,
-      ),
-      home: const FaceRecognitionScreen(),
+      title: "VisionBot",
+      theme: ThemeData(useMaterial3: true),
+      home: const HomePage(),
     );
   }
 }
 
-class FaceRecognitionScreen extends StatefulWidget {
-  const FaceRecognitionScreen({Key? key}) : super(key: key);
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
 
   @override
-  _FaceRecognitionScreenState createState() => _FaceRecognitionScreenState();
+  State<HomePage> createState() => _HomePageState();
 }
 
-class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
-  final CameraService _cameraService = CameraService();
-  final FaceVerificationService _verificationService =
-      FaceVerificationService();
+class _HomePageState extends State<HomePage> {
+  final CameraService _camera = CameraService();
+  final FaceDetectionService _faceDetector = FaceDetectionService();
+  final FaceVerificationService _verifier = FaceVerificationService();
 
-  bool _isInitialized = false;
-  bool _isProcessing = false;
-  String _status = 'Initializing...';
-  Color _statusColor = Colors.orange;
-  Person? _verifiedPerson;
-  double _confidence = 0.0;
+  bool _loading = true;
+  bool _flashOn = false;
+  String _status = "Starting";
+  String _lastMatch = "";
 
   @override
   void initState() {
     super.initState();
-    _initialize();
+    _boot();
   }
 
-  Future<void> _initialize() async {
+  Future<void> _boot() async {
     try {
-      setState(() {
-        _status = 'Loading Face Recognition Model...';
-      });
-
-      // Initialize verification service (loads model + enrolled people)
-      await _verificationService.initialize();
+      await _camera.initialize();
+      await _verifier.initialize();
 
       setState(() {
-        _status = 'Starting Camera... ';
+        _loading = false;
+        _status = "Ready";
       });
-
-      // Initialize camera
-      await _cameraService.initialize();
-
-      setState(() {
-        _isInitialized = true;
-        _status =
-            'Ready - ${_verificationService.enrolledCount} people enrolled';
-        _statusColor = Colors.green;
-      });
-
-      print('✅ App initialized successfully');
     } catch (e) {
       setState(() {
-        _status = 'Initialization Error: $e';
-        _statusColor = Colors.red;
+        _loading = false;
+        _status = "Init failed: $e";
       });
-
-      print('❌ Initialization failed: $e');
     }
   }
 
-  Future<void> _verifyFace() async {
-    if (_isProcessing) return;
+  Future<void> _toggleFlash() async {
+    _flashOn = !_flashOn;
+    await _camera.setFlash(_flashOn);
+    setState(() {});
+  }
 
+  Future<void> _reloadPeople() async {
     setState(() {
-      _isProcessing = true;
-      _status = 'Capturing image...';
-      _statusColor = Colors.blue;
-      _verifiedPerson = null;
-      _confidence = 0.0;
+      _status = "Reloading";
+    });
+    await _verifier.loadEnrolledPeople();
+    setState(() {
+      _status = "Reloaded";
+    });
+  }
+
+  Future<void> _verifyOnce() async {
+    setState(() {
+      _status = "Capturing";
     });
 
-    try {
-      // Step 1: Capture image
-      final image = await _cameraService.captureImage();
-
-      if (image == null) {
-        throw Exception('Failed to capture image');
-      }
-
+    final xf = await _camera.captureXFile();
+    if (xf == null) {
       setState(() {
-        _status = 'Detecting face...';
+        _status = "Capture failed";
       });
-
-      // Step 2: Detect and crop face
-      final face = FaceDetectionService.detectAndCropFace(image);
-
-      if (face == null) {
-        throw Exception('No face detected in image');
-      }
-
-      setState(() {
-        _status = 'Verifying identity...';
-      });
-
-      // Step 3: Verify face
-      final result = _verificationService.verify(face);
-
-      // Step 4: Show result
-      setState(() {
-        _isProcessing = false;
-        _confidence = result.confidence;
-
-        if (result.verified) {
-          _verifiedPerson = result.person;
-          _status = '✅ ${result.message}';
-          _statusColor = Colors.green;
-        } else {
-          _verifiedPerson = null;
-          _status = '❌ ${result.message}';
-          _statusColor = Colors.red;
-        }
-      });
-
-      print(result);
-    } catch (e) {
-      setState(() {
-        _isProcessing = false;
-        _status = 'Error: $e';
-        _statusColor = Colors.red;
-      });
-
-      print('❌ Verification error: $e');
+      return;
     }
-  }
 
-  Future<void> _reloadEnrolledPeople() async {
     setState(() {
-      _status = 'Reloading enrolled people...';
-      _statusColor = Colors.orange;
+      _status = "Detecting face";
     });
 
-    try {
-      await _verificationService.loadEnrolledPeople();
-
+    final face = await _faceDetector.detectAndCropFaceFromFile(xf.path);
+    if (face == null) {
       setState(() {
-        _status =
-            'Ready - ${_verificationService.enrolledCount} people enrolled';
-        _statusColor = Colors.green;
+        _status = "No face detected";
+        _lastMatch = "";
       });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-              'Reloaded ${_verificationService.enrolledCount} enrolled people'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    } catch (e) {
-      setState(() {
-        _status = 'Reload failed: $e';
-        _statusColor = Colors.red;
-      });
+      return;
     }
-  }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        title: const Text(
-          'Car Face Recognition System',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        backgroundColor: Colors.black87,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _isInitialized ? _reloadEnrolledPeople : null,
-            tooltip: 'Reload enrolled people',
-          ),
-        ],
-      ),
-      body: !_isInitialized
-          ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const CircularProgressIndicator(
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
-                  ),
-                  const SizedBox(height: 20),
-                  Text(
-                    _status,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            )
-          : Column(
-              children: [
-                // Camera Preview
-                Expanded(
-                  child: _cameraService.controller != null
-                      ? Stack(
-                          children: [
-                            CameraPreview(_cameraService.controller!),
+    setState(() {
+      _status = "Verifying";
+    });
 
-                            // Face frame overlay
-                            Center(
-                              child: Container(
-                                width: 250,
-                                height: 250,
-                                decoration: BoxDecoration(
-                                  border: Border.all(
-                                    color: _statusColor,
-                                    width: 3,
-                                  ),
-                                  borderRadius: BorderRadius.circular(125),
-                                ),
-                              ),
-                            ),
-                          ],
-                        )
-                      : const Center(
-                          child: Text(
-                            'Camera unavailable',
-                            style: TextStyle(color: Colors.white),
-                          ),
-                        ),
-                ),
+    final result = await _verifier.verifyFace(face);
 
-                // Status Bar
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: _statusColor.withOpacity(0.9),
-                    boxShadow: [
-                      BoxShadow(
-                        color: _statusColor.withOpacity(0.3),
-                        blurRadius: 10,
-                        offset: const Offset(0, -5),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      Text(
-                        _status,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                      if (_verifiedPerson != null) ...[
-                        const SizedBox(height: 12),
-                        Text(
-                          'Person ID: ${_verifiedPerson!.id}',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 14,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Confidence: ${(_confidence * 100).toStringAsFixed(1)}%',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-
-                // Controls
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    children: [
-                      // Verify Button
-                      SizedBox(
-                        width: double.infinity,
-                        height: 70,
-                        child: ElevatedButton.icon(
-                          onPressed: _isProcessing ? null : _verifyFace,
-                          icon: _isProcessing
-                              ? const SizedBox(
-                                  width: 24,
-                                  height: 24,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 3,
-                                    valueColor: AlwaysStoppedAnimation<Color>(
-                                        Colors.white),
-                                  ),
-                                )
-                              : const Icon(Icons.face_rounded, size: 32),
-                          label: Text(
-                            _isProcessing ? 'Processing...' : 'Verify Face',
-                            style: const TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.blue,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      // Info Text
-                      Text(
-                        '${_verificationService.enrolledCount} people enrolled',
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-    );
+    setState(() {
+      _status = result.message;
+      _lastMatch = result.verified ? (result.person?.name ?? "") : "";
+    });
   }
 
   @override
   void dispose() {
-    _cameraService.dispose();
-    _verificationService.dispose();
+    _camera.dispose();
+    _verifier.dispose();
+    _faceDetector.dispose();
     super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _camera.controller;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("VisionBot"),
+        actions: [
+          IconButton(
+            onPressed: _loading ? null : _toggleFlash,
+            icon: Icon(_flashOn ? Icons.flash_on : Icons.flash_off),
+          ),
+          IconButton(
+            onPressed: _loading
+                ? null
+                : () async {
+                    await _camera.switchCamera();
+                    setState(() {});
+                  },
+            icon: const Icon(Icons.cameraswitch),
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
+              children: [
+                if (controller != null && controller.value.isInitialized)
+                  AspectRatio(
+                    aspectRatio: controller.value.aspectRatio,
+                    child: CameraPreview(controller),
+                  )
+                else
+                  const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text("Camera not ready"),
+                  ),
+                const SizedBox(height: 12),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _verifyOnce,
+                          child: const Text("Verify now"),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _reloadPeople,
+                          child: const Text("Reload people"),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      Expanded(child: Text("Status: $_status")),
+                    ],
+                  ),
+                ),
+                if (_lastMatch.isNotEmpty)
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text("Matched: $_lastMatch")),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+    );
   }
 }
