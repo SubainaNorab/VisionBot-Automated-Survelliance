@@ -90,7 +90,7 @@ class FaceVerificationService {
 
   List<String> _extractAssetKeys(String manifest) {
     final keys = <String>[];
-    final regex = RegExp(r"\"([^\"]+)\":\s*\[");
+    final regex = RegExp(r'"([^"]+)":\s*\[');
     for (final m in regex.allMatches(manifest)) {
       final k = m.group(1);
       if (k != null) keys.add(k);
