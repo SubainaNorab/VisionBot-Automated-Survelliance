@@ -1,109 +1,55 @@
-import 'package:image/image.dart' as img;
+import "dart:io";
+import "package:google_mlkit_face_detection/google_mlkit_face_detection.dart";
+import "package:image/image.dart" as img;
 
 class FaceDetectionService {
-  // Simple face detection using center crop
-  // For production, replace with Google ML Kit Face Detection or MTCNN
+  final FaceDetector _detector = FaceDetector(
+    options: FaceDetectorOptions(
+      performanceMode: FaceDetectorMode.fast,
+      enableLandmarks: true,
+      enableContours: false,
+      enableClassification: false,
+      minFaceSize: 0.15,
+    ),
+  );
 
-  /// Detect and crop face from image
-  /// Returns cropped face or null if no face detected
-  static img.Image? detectAndCropFace(img.Image image) {
-    print('🔍 Detecting face in ${image.width}x${image.height} image');
+  Future<img.Image?> detectAndCropFaceFromFile(
+    String filePath, {
+    double paddingPercent = 0.25,
+  }) async {
+    final input = InputImage.fromFile(File(filePath));
+    final faces = await _detector.processImage(input);
+    if (faces.isEmpty) return null;
 
-    // Simple center crop method
-    // TODO: Replace with actual face detection for production
-    // Options:
-    // 1. Google ML Kit Face Detection
-    // 2. MTCNN
-    // 3. OpenCV Haar Cascades (via FFI)
+    faces.sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
+        .compareTo(a.boundingBox.width * a.boundingBox.height));
+    final face = faces.first;
 
-    final size = image.width < image.height ? image.width : image.height;
-    final x = (image.width - size) ~/ 2;
-    final y = (image.height - size) ~/ 2;
+    final bytes = await File(filePath).readAsBytes();
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) return null;
 
-    try {
-      final cropped = img.copyCrop(
-        image,
-        x: x,
-        y: y,
-        width: size,
-        height: size,
-      );
+    final b = face.boundingBox;
 
-      print('✅ Face cropped:  ${cropped.width}x${cropped.height}');
-      return cropped;
-    } catch (e) {
-      print('❌ Face crop failed: $e');
-      return null;
-    }
+    final padX = (b.width * paddingPercent).round();
+    final padY = (b.height * paddingPercent).round();
+
+    final x1 = (b.left.round() - padX).clamp(0, decoded.width - 1);
+    final y1 = (b.top.round() - padY).clamp(0, decoded.height - 1);
+    final x2 = (b.right.round() + padX).clamp(0, decoded.width);
+    final y2 = (b.bottom.round() + padY).clamp(0, decoded.height);
+
+    final w = (x2 - x1).clamp(1, decoded.width);
+    final h = (y2 - y1).clamp(1, decoded.height);
+
+    final cropped = img.copyCrop(decoded, x: x1, y: y1, width: w, height: h);
+
+    if (cropped.width < 80 || cropped.height < 80) return null;
+
+    return cropped;
   }
 
-  /// Preprocess face for FaceNet model
-  /// Resize to 160x160
-  static img.Image preprocessForFaceNet(img.Image face) {
-    print('🔄 Preprocessing face for FaceNet.. .');
-
-    final resized = img.copyResize(
-      face,
-      width: 160,
-      height: 160,
-      interpolation: img.Interpolation.linear,
-    );
-
-    print('✅ Resized to 160x160');
-    return resized;
-  }
-
-  /// Validate if image might contain a face
-  /// Basic validation - checks if image is not too small
-  static bool isValidFaceImage(img.Image? image) {
-    if (image == null) return false;
-
-    // Face should be at least 50x50 pixels
-    if (image.width < 50 || image.height < 50) {
-      print('⚠️ Image too small for face detection');
-      return false;
-    }
-
-    return true;
-  }
-
-  /// Extract face region with padding
-  /// Used for better face crop quality
-  static img.Image? extractFaceWithPadding(
-    img.Image image,
-    int x,
-    int y,
-    int width,
-    int height, {
-    double padding = 0.3,
-  }) {
-    try {
-      // Calculate padding
-      final pad = (width * padding).toInt();
-
-      // Calculate crop boundaries with padding
-      final x1 = (x - pad).clamp(0, image.width - 1);
-      final y1 = (y - pad).clamp(0, image.height - 1);
-      final x2 = (x + width + pad).clamp(0, image.width);
-      final y2 = (y + height + pad).clamp(0, image.height);
-
-      final cropWidth = x2 - x1;
-      final cropHeight = y2 - y1;
-
-      if (cropWidth <= 0 || cropHeight <= 0) {
-        return null;
-      }
-
-      return img.copyCrop(
-        image,
-        x: x1,
-        y: y1,
-        width: cropWidth,
-        height: cropHeight,
-      );
-    } catch (e) {
-      print('❌ Extract face with padding failed: $e');
-      return null;
-    }
+  Future<void> dispose() async {
+    await _detector.close();
   }
 }

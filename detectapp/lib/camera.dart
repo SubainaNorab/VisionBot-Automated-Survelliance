@@ -1,125 +1,79 @@
-import 'package:camera/camera.dart';
-import 'package:image/image.dart' as img;
-import 'dart:typed_data';
+import "package:camera/camera.dart";
+import "package:image/image.dart" as img;
 
 class CameraService {
   CameraController? _controller;
   List<CameraDescription>? _cameras;
 
-  bool get isInitialized => _controller?.value.isInitialized ?? false;
   CameraController? get controller => _controller;
+  bool get isInitialized => _controller?.value.isInitialized ?? false;
 
-  /// Initialize camera
   Future<void> initialize() async {
-    print('📷 Initializing camera...');
+    _cameras = await availableCameras();
 
-    try {
-      // Get available cameras
-      _cameras = await availableCameras();
+    final back = _cameras!.firstWhere(
+      (c) => c.lensDirection == CameraLensDirection.back,
+      orElse: () => _cameras!.first,
+    );
 
-      if (_cameras == null || _cameras!.isEmpty) {
-        throw Exception('No cameras found on device');
-      }
+    _controller = CameraController(
+      back,
+      ResolutionPreset.medium,
+      enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.yuv420,
+    );
 
-      print('   Found ${_cameras!.length} camera(s)');
-      for (var i = 0; i < _cameras!.length; i++) {
-        print(
-            '   Camera $i: ${_cameras![i].name} (${_cameras![i].lensDirection})');
-      }
-
-      // Use first camera (usually back camera)
-      // For car system, this should be the front-facing camera
-      final cameraToUse = _cameras!.firstWhere(
-        (camera) => camera.lensDirection == CameraLensDirection.front,
-        orElse: () => _cameras!.first,
-      );
-
-      print('   Using:  ${cameraToUse.name}');
-
-      // Initialize controller
-      _controller = CameraController(
-        cameraToUse,
-        ResolutionPreset.medium,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
-      );
-
-      await _controller!.initialize();
-
-      print('✅ Camera initialized successfully');
-      print('   Resolution: ${_controller!.value.previewSize}');
-    } catch (e) {
-      print('❌ Camera initialization failed: $e');
-      rethrow;
-    }
+    await _controller!.initialize();
   }
 
-  /// Capture image from camera
-  Future<img.Image?> captureImage() async {
-    if (_controller == null || !_controller!.value.isInitialized) {
-      print('❌ Camera not initialized');
-      return null;
-    }
+  Future<XFile?> captureXFile() async {
+    final c = _controller;
+    if (c == null) return null;
+    if (!c.value.isInitialized) return null;
+    if (c.value.isTakingPicture) return null;
 
-    try {
-      print('📸 Capturing image...');
-
-      // Take picture
-      final XFile imageFile = await _controller!.takePicture();
-
-      // Read bytes
-      final Uint8List bytes = await imageFile.readAsBytes();
-
-      print('   Image size: ${bytes.length} bytes');
-
-      // Decode image
-      final image = img.decodeImage(bytes);
-
-      if (image == null) {
-        print('❌ Failed to decode image');
-        return null;
-      }
-
-      print('✅ Image captured:  ${image.width}x${image.height}');
-
-      return image;
-    } catch (e) {
-      print('❌ Image capture failed:  $e');
-      return null;
-    }
+    return c.takePicture();
   }
 
-  /// Switch to next available camera
+  Future<img.Image?> captureDecodedImage() async {
+    final xf = await captureXFile();
+    if (xf == null) return null;
+
+    final bytes = await xf.readAsBytes();
+    return img.decodeImage(bytes);
+  }
+
   Future<void> switchCamera() async {
-    if (_cameras == null || _cameras!.length < 2) {
-      print('⚠️ No other cameras available');
-      return;
-    }
+    if (_cameras == null) return;
+    if (_cameras!.length < 2) return;
+    final c = _controller;
+    if (c == null) return;
 
-    try {
-      final currentIndex = _cameras!.indexOf(_controller!.description);
-      final nextIndex = (currentIndex + 1) % _cameras!.length;
+    final currentIndex = _cameras!.indexOf(c.description);
+    final nextIndex = (currentIndex + 1) % _cameras!.length;
 
-      await _controller?.dispose();
+    await c.dispose();
 
-      _controller = CameraController(
-        _cameras![nextIndex],
-        ResolutionPreset.medium,
-        enableAudio: false,
-      );
+    _controller = CameraController(
+      _cameras![nextIndex],
+      ResolutionPreset.medium,
+      enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.yuv420,
+    );
 
-      await _controller!.initialize();
-
-      print('✅ Switched to camera:  ${_cameras![nextIndex].name}');
-    } catch (e) {
-      print('❌ Camera switch failed: $e');
-    }
+    await _controller!.initialize();
   }
 
-  /// Dispose camera resources
+  Future<void> setFlash(bool on) async {
+    final c = _controller;
+    if (c == null) return;
+    if (!c.value.isInitialized) return;
+
+    await c.setFlashMode(on ? FlashMode.torch : FlashMode.off);
+  }
+
   void dispose() {
     _controller?.dispose();
     _controller = null;
-    print('🗑️ Camera disposed');
   }
 }
