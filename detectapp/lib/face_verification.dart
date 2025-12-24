@@ -1,6 +1,7 @@
 import "dart:math";
 import "dart:typed_data";
 import "package:cloud_firestore/cloud_firestore.dart";
+import "package:flutter/services.dart";
 import "package:image/image.dart" as img;
 import "package:tflite_flutter/tflite_flutter.dart";
 import "model/person.dart";
@@ -10,7 +11,6 @@ class VerificationResult {
   final Person? person;
   final double confidence;
   final String message;
-
   final Person? nearestMatch;
   final double? nearestSimilarity;
 
@@ -25,6 +25,7 @@ class VerificationResult {
 }
 
 class FaceVerificationService {
+  static const String facesCollection = "enrolled_faces";
   static const int inputSize = 160;
 
   double recognitionThreshold = 0.55;
@@ -39,71 +40,76 @@ class FaceVerificationService {
   int _winnerStreak = 0;
   DateTime? _cooldownUntil;
 
+  void _log(String msg) {
+    print(msg);
+  }
+
   Future<void> initialize() async {
-    _interpreter = await Interpreter.fromAsset("facenet.tflite");
+    _log("🚀 FaceVerification.initialize started");
 
-    final outTensor = _interpreter!.getOutputTensor(0);
-    _embeddingSize = outTensor.shape.last;
+    try {
+      _log("📦 Loading AssetManifest.json");
+      final manifest = await rootBundle.loadString("AssetManifest.json");
+      _log("✅ AssetManifest loaded. Length: ${manifest.length}");
 
-    await loadEnrolledPeople();
+      final hasKey = manifest.contains("\"assets/facenet.tflite\"");
+      _log(hasKey
+          ? "✅ Found key assets/facenet.tflite in AssetManifest"
+          : "❌ AssetManifest missing key assets/facenet.tflite");
+
+      if (!hasKey) {
+        _log("🔎 Printing first 30 asset keys for debugging");
+        final keys = _extractAssetKeys(manifest);
+        final show = keys.take(30).toList();
+        for (final k in show) {
+          _log("🧾 asset: $k");
+        }
+        throw Exception("AssetManifest missing assets/facenet.tflite");
+      }
+
+      _log("🧪 Trying rootBundle.load(assets/facenet.tflite)");
+      final bytes = await rootBundle.load("assets/facenet.tflite");
+      _log("✅ rootBundle.load success. Bytes: ${bytes.lengthInBytes}");
+
+      _log("🧠 Loading TFLite interpreter fromAsset(facenet.tflite)");
+      _interpreter = await Interpreter.fromAsset("facenet.tflite");
+      _log("✅ Interpreter loaded");
+
+      final outTensor = _interpreter!.getOutputTensor(0);
+      _embeddingSize = outTensor.shape.last;
+      _log("✅ Model output shape: ${outTensor.shape}. embeddingSize=$_embeddingSize");
+
+      _log("📥 Loading enrolled faces from Firestore: $facesCollection");
+      await loadEnrolledPeople();
+      _log("✅ initialize finished");
+    } catch (e) {
+      _log("🔥 initialize failed: $e");
+      rethrow;
+    }
+  }
+
+  List<String> _extractAssetKeys(String manifest) {
+    final keys = <String>[];
+    final regex = RegExp(r"\"([^\"]+)\":\s*\[");
+    for (final m in regex.allMatches(manifest)) {
+      final k = m.group(1);
+      if (k != null) keys.add(k);
+    }
+    return keys;
   }
 
   Future<void> loadEnrolledPeople() async {
     _people.clear();
-
-    final snap = await _db.collection("persons").get();
-    for (final doc in snap.docs) {
-      final p = Person.fromMap(doc.id, doc.data());
-      if (p.embeddings.isNotEmpty) _people.add(p);
+    try {
+      final snap = await _db.collection(facesCollection).get();
+      for (final doc in snap.docs) {
+        final p = Person.fromMap(doc.id, doc.data());
+        if (p.embeddings.isNotEmpty) _people.add(p);
+      }
+      _log("✅ Firestore loaded. People: ${_people.length}");
+    } catch (e) {
+      _log("⚠️ Firestore load failed: $e");
     }
-  }
-
-  Future<void> enrollPerson({
-    required String name,
-    required img.Image faceImage,
-    int maxEmbeddingsPerPerson = 10,
-  }) async {
-    final emb = await extractEmbedding(faceImage);
-    if (emb == null) return;
-
-    final ref = _db.collection("persons").doc();
-    await ref.set({
-      "name": name,
-      "embeddings": [emb],
-      "createdAt": FieldValue.serverTimestamp(),
-    });
-
-    await loadEnrolledPeople();
-  }
-
-  Future<void> addEmbeddingToPerson({
-    required String personId,
-    required img.Image faceImage,
-    int maxEmbeddingsPerPerson = 10,
-  }) async {
-    final emb = await extractEmbedding(faceImage);
-    if (emb == null) return;
-
-    final ref = _db.collection("persons").doc(personId);
-    final doc = await ref.get();
-    if (!doc.exists) return;
-
-    final data = doc.data() as Map<String, dynamic>;
-    final p = Person.fromMap(personId, data);
-
-    final updated = List<List<double>>.from(p.embeddings);
-    updated.add(emb);
-
-    if (updated.length > maxEmbeddingsPerPerson) {
-      updated.removeAt(0);
-    }
-
-    await ref.update({
-      "embeddings": updated,
-      "updatedAt": FieldValue.serverTimestamp(),
-    });
-
-    await loadEnrolledPeople();
   }
 
   Future<VerificationResult> verifyFace(img.Image faceImage) async {
@@ -112,7 +118,7 @@ class FaceVerificationService {
         verified: false,
         person: null,
         confidence: 0.0,
-        message: "Cooldown",
+        message: "⏳ Cooldown",
         nearestMatch: null,
         nearestSimilarity: null,
       );
@@ -123,7 +129,7 @@ class FaceVerificationService {
         verified: false,
         person: null,
         confidence: 0.0,
-        message: "No enrolled people",
+        message: "⚠️ No enrolled faces",
         nearestMatch: null,
         nearestSimilarity: null,
       );
@@ -135,7 +141,7 @@ class FaceVerificationService {
         verified: false,
         person: null,
         confidence: 0.0,
-        message: "Embedding failed",
+        message: "❌ Embedding failed",
         nearestMatch: null,
         nearestSimilarity: null,
       );
@@ -157,7 +163,7 @@ class FaceVerificationService {
         verified: false,
         person: null,
         confidence: 0.0,
-        message: "No match",
+        message: "❌ No match",
         nearestMatch: null,
         nearestSimilarity: null,
       );
@@ -171,7 +177,7 @@ class FaceVerificationService {
           verified: false,
           person: null,
           confidence: bestSim,
-          message: "Hold steady",
+          message: "🟡 Hold steady (${bestSim.toStringAsFixed(3)})",
           nearestMatch: bestPerson,
           nearestSimilarity: bestSim,
         );
@@ -183,7 +189,7 @@ class FaceVerificationService {
         verified: true,
         person: bestPerson,
         confidence: bestSim,
-        message: "Verified: ${bestPerson.name}",
+        message: "✅ Verified ${bestPerson.name} (${bestSim.toStringAsFixed(3)})",
         nearestMatch: bestPerson,
         nearestSimilarity: bestSim,
       );
@@ -196,7 +202,7 @@ class FaceVerificationService {
       verified: false,
       person: null,
       confidence: bestSim,
-      message: "Unknown",
+      message: "❌ Unknown (${bestSim.toStringAsFixed(3)})",
       nearestMatch: bestPerson,
       nearestSimilarity: bestSim,
     );
@@ -223,17 +229,20 @@ class FaceVerificationService {
 
   Future<List<double>?> extractEmbedding(img.Image faceImage) async {
     final i = _interpreter;
-    if (i == null) return null;
+    if (i == null) {
+      _log("❌ Interpreter is null");
+      return null;
+    }
 
     if (_embeddingSize == 0) {
       final outTensor = i.getOutputTensor(0);
       _embeddingSize = outTensor.shape.last;
+      _log("ℹ️ embeddingSize detected late: $_embeddingSize");
     }
 
     final input =
         _imageToInputBuffer(faceImage).reshape([1, inputSize, inputSize, 3]);
-    final output =
-        List.filled(_embeddingSize, 0.0).reshape([1, _embeddingSize]);
+    final output = List.filled(_embeddingSize, 0.0).reshape([1, _embeddingSize]);
 
     i.run(input, output);
 

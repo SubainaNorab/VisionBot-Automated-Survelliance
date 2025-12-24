@@ -1,12 +1,10 @@
 import "package:camera/camera.dart";
-import "package:image/image.dart" as img;
 
 class CameraService {
   CameraController? _controller;
   List<CameraDescription>? _cameras;
 
   CameraController? get controller => _controller;
-  bool get isInitialized => _controller?.value.isInitialized ?? false;
 
   Future<void> initialize() async {
     _cameras = await availableCameras();
@@ -31,16 +29,7 @@ class CameraService {
     if (c == null) return null;
     if (!c.value.isInitialized) return null;
     if (c.value.isTakingPicture) return null;
-
     return c.takePicture();
-  }
-
-  Future<img.Image?> captureDecodedImage() async {
-    final xf = await captureXFile();
-    if (xf == null) return null;
-
-    final bytes = await xf.readAsBytes();
-    return img.decodeImage(bytes);
   }
 
   Future<void> switchCamera() async {
@@ -68,7 +57,6 @@ class CameraService {
     final c = _controller;
     if (c == null) return;
     if (!c.value.isInitialized) return;
-
     await c.setFlashMode(on ? FlashMode.torch : FlashMode.off);
   }
 
