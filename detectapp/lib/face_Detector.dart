@@ -1,55 +1,68 @@
-import "dart:io";
-import "package:google_mlkit_face_detection/google_mlkit_face_detection.dart";
-import "package:image/image.dart" as img;
+import 'dart:io';
+
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:image/image.dart' as img;
 
 class FaceDetectionService {
-  final FaceDetector _detector = FaceDetector(
+  static final FaceDetector _detector = FaceDetector(
     options: FaceDetectorOptions(
       performanceMode: FaceDetectorMode.fast,
-      enableLandmarks: true,
       enableContours: false,
-      enableClassification: false,
-      minFaceSize: 0.15,
+      enableLandmarks: false,
     ),
   );
 
-  Future<img.Image?> detectAndCropFaceFromFile(
-    String filePath, {
-    double paddingPercent = 0.25,
-  }) async {
-    final input = InputImage.fromFile(File(filePath));
-    final faces = await _detector.processImage(input);
+  static img.Image? detectAndCropFace(File imageFile) {
+    final inputImage = InputImage.fromFile(imageFile);
+
+    // ML Kit is async, but your current main calls sync.
+    // Keep this method sync by doing a simple fallback crop if you want sync only.
+    // Better: use detectAndCropFaceAsync below.
+    return null;
+  }
+
+  static Future<img.Image?> detectAndCropFaceAsync(File imageFile) async {
+    final inputImage = InputImage.fromFile(imageFile);
+    final faces = await _detector.processImage(inputImage);
+
     if (faces.isEmpty) return null;
 
-    faces.sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
-        .compareTo(a.boundingBox.width * a.boundingBox.height));
-    final face = faces.first;
-
-    final bytes = await File(filePath).readAsBytes();
+    final bytes = await imageFile.readAsBytes();
     final decoded = img.decodeImage(bytes);
     if (decoded == null) return null;
 
-    final b = face.boundingBox;
+    // pick the largest face
+    Face best = faces.first;
+    double bestArea = 0;
 
-    final padX = (b.width * paddingPercent).round();
-    final padY = (b.height * paddingPercent).round();
+    for (final f in faces) {
+      final r = f.boundingBox;
+      final area = r.width * r.height;
+      if (area > bestArea) {
+        bestArea = area;
+        best = f;
+      }
+    }
 
-    final x1 = (b.left.round() - padX).clamp(0, decoded.width - 1);
-    final y1 = (b.top.round() - padY).clamp(0, decoded.height - 1);
-    final x2 = (b.right.round() + padX).clamp(0, decoded.width);
-    final y2 = (b.bottom.round() + padY).clamp(0, decoded.height);
+    final rect = best.boundingBox;
 
-    final w = (x2 - x1).clamp(1, decoded.width);
-    final h = (y2 - y1).clamp(1, decoded.height);
+    int x = rect.left.floor();
+    int y = rect.top.floor();
+    int w = rect.width.floor();
+    int h = rect.height.floor();
 
-    final cropped = img.copyCrop(decoded, x: x1, y: y1, width: w, height: h);
+    // padding
+    final pad = (w * 0.25).floor();
+    x = (x - pad).clamp(0, decoded.width - 1);
+    y = (y - pad).clamp(0, decoded.height - 1);
+    w = (w + pad * 2).clamp(1, decoded.width - x);
+    h = (h + pad * 2).clamp(1, decoded.height - y);
 
-    if (cropped.width < 80 || cropped.height < 80) return null;
-
+    final cropped = img.copyCrop(decoded, x: x, y: y, width: w, height: h);
     return cropped;
   }
 
-  Future<void> dispose() async {
+  static Future<void> dispose() async {
     await _detector.close();
   }
 }

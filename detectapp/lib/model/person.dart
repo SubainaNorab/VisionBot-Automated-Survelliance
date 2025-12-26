@@ -2,34 +2,42 @@ class Person {
   final String id;
   final String name;
 
-  // multiple embeddings per person
+  // Multiple embeddings per person
   final List<List<double>> embeddings;
 
-  Person({
-    required this.id,
-    required this.name,
-    required this.embeddings,
-  });
+  Person({required this.id, required this.name, required this.embeddings});
 
   Map<String, dynamic> toMap() {
-    return {
-      "name": name,
-      "embeddings": embeddings,
-    };
+    return {"name": name, "embeddings": embeddings};
   }
 
   factory Person.fromMap(String id, Map<String, dynamic> map) {
-    final raw = (map["embeddings"] ?? []) as List<dynamic>;
+    final name = (map["name"] ?? "") as String;
 
-    final parsed = raw
-        .map((e) =>
-            (e as List<dynamic>).map((v) => (v as num).toDouble()).toList())
-        .toList();
+    // Support BOTH formats from Firestore:
+    // 1) "embedding": [128 floats]  (your Python script)
+    // 2) "embeddings": [[128 floats], [128 floats], ...]
+    final dynamic rawEmbeddings = map["embeddings"];
+    final dynamic rawEmbedding = map["embedding"];
 
-    return Person(
-      id: id,
-      name: (map["name"] ?? "") as String,
-      embeddings: parsed,
-    );
+    List<List<double>> parsed = [];
+
+    if (rawEmbeddings is List) {
+      // expected: List<List<num>>
+      parsed =
+          rawEmbeddings
+              .map(
+                (e) => (e as List).map((v) => (v as num).toDouble()).toList(),
+              )
+              .toList();
+    } else if (rawEmbedding is List) {
+      // expected: List<num>
+      final one = rawEmbedding.map((v) => (v as num).toDouble()).toList();
+      parsed = [one];
+    } else {
+      parsed = [];
+    }
+
+    return Person(id: id, name: name, embeddings: parsed);
   }
 }

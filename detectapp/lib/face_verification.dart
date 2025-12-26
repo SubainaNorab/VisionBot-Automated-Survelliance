@@ -3,211 +3,243 @@ import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
+import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 import 'model/person.dart';
 
-class FaceVerificationService {
-  FaceVerificationService._internal();
-  static final FaceVerificationService instance =
-      FaceVerificationService._internal();
+class VerificationResult {
+  final bool verified;
+  final Person? person;
+  final double confidence;
+  final String message;
 
-  factory FaceVerificationService() => instance;
+  const VerificationResult({
+    required this.verified,
+    required this.person,
+    required this.confidence,
+    required this.message,
+  });
+
+  @override
+  String toString() {
+    return 'VerificationResult(verified=$verified, person=${person?.name}, confidence=$confidence, message=$message)';
+  }
+}
+
+class FaceVerificationService {
+  static const String _collectionName = 'enrolled_faces';
+  static const String _modelAssetPath = 'assets/facenet.tflite';
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   Interpreter? _interpreter;
+
+  int _inputW = 160;
+  int _inputH = 160;
   int _embeddingSize = 128;
 
-  final List<Person> _people = [];
+  final List<Person> _enrolledPeople = [];
 
-  bool get isModelLoaded => _interpreter != null;
-  int get enrolledCount => _people.length;
-
-  final String collectionName = "enrolled_faces";
-
-  /* ===================== PUBLIC API ===================== */
-
-  Future<void> loadEnrolledPeople() async {
-    await initialize();
-  }
-
-  Future<Person?> verifyFace(
-    List<double> embedding, {
-    double threshold = 0.55,
-  }) async {
-    if (_interpreter == null) {
-      print("⚠️ verifyFace called before model load. Initializing...");
-      await initialize();
-    }
-
-    if (_people.isEmpty) {
-      print("⚠️ No enrolled faces available for verification");
-      return null;
-    }
-
-    Person? best;
-    double bestScore = -999;
-
-    for (final person in _people) {
-      for (final ref in person.embeddings) {
-        final score = _cosineSimilarity(embedding, ref);
-        if (score > bestScore) {
-          bestScore = score;
-          best = person;
-        }
-      }
-    }
-
-    print("🔎 Best match score=$bestScore person=${best?.name}");
-
-    if (best != null && bestScore >= threshold) {
-      print("✅ Face verified: ${best.name}");
-      return best;
-    }
-
-    print("❌ Face not recognized");
-    return null;
-  }
-
-  /* ===================== INIT ===================== */
+  int get enrolledCount => _enrolledPeople.length;
 
   Future<void> initialize() async {
-    try {
-      print("🚀 FaceVerification.initialize started");
-      await _loadModel();
-      await _loadEnrolledFaces();
-      print(
-        "✅ FaceVerification ready. modelLoaded=$isModelLoaded people=${_people.length}",
+    await _loadModel();
+    await loadEnrolledPeople();
+  }
+
+  void dispose() {
+    _interpreter?.close();
+    _interpreter = null;
+  }
+
+  // Keep your old call style working
+  VerificationResult verify(img.Image faceImage) {
+    return verifyFace(faceImage);
+  }
+
+  // New name, matches what you were calling in another main.dart
+  VerificationResult verifyFace(img.Image faceImage) {
+    if (_interpreter == null) {
+      return const VerificationResult(
+        verified: false,
+        person: null,
+        confidence: 0.0,
+        message: 'Model not loaded',
       );
-    } catch (e) {
-      print("❌ FaceVerification.initialize failed: $e");
-      rethrow;
-    }
-  }
-
-  /* ===================== MODEL ===================== */
-
-  Future<void> _loadModel() async {
-    if (_interpreter != null) {
-      print("ℹ️ FaceNet already loaded");
-      return;
     }
 
-    try {
-      print("📦 Loading FaceNet asset");
-      final ByteData bd = await rootBundle.load("assets/facenet.tflite");
-      final Uint8List bytes = bd.buffer.asUint8List();
-
-      print("🧠 Creating TFLite interpreter");
-      _interpreter = Interpreter.fromBuffer(bytes);
-
-      final outShape = _interpreter!.getOutputTensor(0).shape;
-      _embeddingSize = outShape.last;
-
-      print("✅ FaceNet loaded. embeddingSize=$_embeddingSize");
-    } catch (e) {
-      print("❌ Failed to load FaceNet: $e");
-      _interpreter = null;
-      rethrow;
+    if (_enrolledPeople.isEmpty) {
+      return const VerificationResult(
+        verified: false,
+        person: null,
+        confidence: 0.0,
+        message: 'No enrolled faces found in Firestore',
+      );
     }
-  }
 
-  /* ===================== FIRESTORE ===================== */
+    final input = _preprocessFace(faceImage);
+    final candidate = _getEmbedding(input);
 
-  Future<void> _loadEnrolledFaces() async {
-    try {
-      print("📥 Loading Firestore collection: $collectionName");
+    double bestDistance = double.infinity;
+    Person? bestPerson;
 
-      final snap = await _db.collection(collectionName).get();
-      print("✅ Firestore docs found: ${snap.docs.length}");
+    for (final person in _enrolledPeople) {
+      for (final stored in person.embeddings) {
+        if (stored.length != _embeddingSize) continue;
 
-      _people.clear();
-
-      for (final doc in snap.docs) {
-        final data = doc.data();
-        final name = (data["name"] ?? "") as String;
-
-        try {
-          final embeddings = _parseEmbeddings(data);
-
-          if (embeddings.isEmpty) {
-            print("⚠️ ${doc.id} skipped. No embeddings");
-            continue;
-          }
-
-          final len = embeddings.first.length;
-          if (len != _embeddingSize) {
-            print(
-              "⚠️ ${doc.id} skipped. Embedding size mismatch $len != $_embeddingSize",
-            );
-            continue;
-          }
-
-          _people.add(Person(id: doc.id, name: name, embeddings: embeddings));
-
-          print("👤 Loaded ${name} embeddings=${embeddings.length}");
-        } catch (e) {
-          print("❌ Failed parsing ${doc.id}: $e");
-          print("🧾 Keys: ${data.keys.toList()}");
+        final d = _cosineDistance(candidate, stored);
+        if (d < bestDistance) {
+          bestDistance = d;
+          bestPerson = person;
         }
       }
+    }
 
-      if (_people.isEmpty) {
-        print("⚠️ No valid enrolled faces loaded");
-      } else {
-        print("✅ Total enrolled faces loaded: ${_people.length}");
+    if (bestPerson == null) {
+      return const VerificationResult(
+        verified: false,
+        person: null,
+        confidence: 0.0,
+        message: 'No valid enrolled embeddings',
+      );
+    }
+
+    // Cosine distance: 0 is identical, bigger is worse.
+    // Threshold depends on your model and preprocessing.
+    // Start here, then tune.
+    const threshold = 0.45;
+
+    final verified = bestDistance <= threshold;
+
+    // Convert distance to confidence-like score (0..1), simple and stable.
+    final confidence = (1.0 - (bestDistance / threshold)).clamp(0.0, 1.0);
+
+    return VerificationResult(
+      verified: verified,
+      person: verified ? bestPerson : null,
+      confidence: confidence,
+      message:
+          verified
+              ? 'Verified: ${bestPerson.name}'
+              : 'Not matched (distance=${bestDistance.toStringAsFixed(3)})',
+    );
+  }
+
+  Future<void> loadEnrolledPeople() async {
+    _enrolledPeople.clear();
+
+    final snap = await _db.collection(_collectionName).get();
+
+    for (final doc in snap.docs) {
+      final data = doc.data();
+      final p = Person.fromMap(doc.id, data);
+
+      // Filter out bad docs
+      if (p.name.trim().isEmpty) continue;
+      if (p.embeddings.isEmpty) continue;
+      if (p.embeddings.first.length != _embeddingSize) continue;
+
+      _enrolledPeople.add(p);
+    }
+
+    // Debug print
+    // ignore: avoid_print
+    print('✅ Loaded enrolled people: ${_enrolledPeople.length}');
+  }
+
+  Future<void> _loadModel() async {
+    // ignore: avoid_print
+    print('🚀 FaceVerification.initialize started');
+
+    // Do NOT load AssetManifest.json. It can fail in some setups.
+    // Just load the model directly.
+    final ByteData bytes = await rootBundle.load(_modelAssetPath);
+    final buffer = bytes.buffer.asUint8List();
+
+    _interpreter = Interpreter.fromBuffer(
+      buffer,
+      options: InterpreterOptions(),
+    );
+
+    final inputShape = _interpreter!.getInputTensor(0).shape;
+    final outputShape = _interpreter!.getOutputTensor(0).shape;
+
+    // input: [1, H, W, 3]
+    _inputH = inputShape[1];
+    _inputW = inputShape[2];
+
+    // output: [1, 128]
+    _embeddingSize = outputShape.last;
+
+    // ignore: avoid_print
+    print('✅ Model loaded. input=$_inputH x $_inputW, emb=$_embeddingSize');
+  }
+
+  List<List<List<List<double>>>> _preprocessFace(img.Image face) {
+    // resize to model input
+    final resized = img.copyResize(face, width: _inputW, height: _inputH);
+
+    // float32 normalized 0..1
+    final input = List.generate(
+      1,
+      (_) => List.generate(
+        _inputH,
+        (_) => List.generate(_inputW, (_) => List.filled(3, 0.0)),
+      ),
+    );
+
+    for (int y = 0; y < _inputH; y++) {
+      for (int x = 0; x < _inputW; x++) {
+        final p = resized.getPixel(x, y);
+
+        final r = p.r / 255.0;
+        final g = p.g / 255.0;
+        final b = p.b / 255.0;
+
+        input[0][y][x][0] = r;
+        input[0][y][x][1] = g;
+        input[0][y][x][2] = b;
       }
-    } catch (e) {
-      print("❌ Firestore load failed: $e");
-      rethrow;
     }
+
+    return input;
   }
 
-  List<List<double>> _parseEmbeddings(Map<String, dynamic> data) {
-    if (data.containsKey("embeddings") && data["embeddings"] != null) {
-      final raw = data["embeddings"] as List<dynamic>;
-      return raw
-          .map(
-            (e) =>
-                (e as List<dynamic>).map((v) => (v as num).toDouble()).toList(),
-          )
-          .toList();
+  List<double> _getEmbedding(List<List<List<List<double>>>> input) {
+    final out = List.generate(1, (_) => List.filled(_embeddingSize, 0.0));
+
+    _interpreter!.run(input, out);
+
+    final emb = out[0];
+
+    // L2 normalize like your Python script
+    final norm = sqrt(emb.fold(0.0, (s, v) => s + v * v));
+    if (norm > 0) {
+      for (int i = 0; i < emb.length; i++) {
+        emb[i] = emb[i] / norm;
+      }
     }
 
-    if (data.containsKey("embedding") && data["embedding"] != null) {
-      final raw = data["embedding"] as List<dynamic>;
-      return [raw.map((v) => (v as num).toDouble()).toList()];
-    }
-
-    return [];
+    return emb;
   }
 
-  /* ===================== MATH ===================== */
+  double _cosineDistance(List<double> a, List<double> b) {
+    double dot = 0.0;
+    double na = 0.0;
+    double nb = 0.0;
 
-  double _cosineSimilarity(List<double> a, List<double> b) {
-    double dot = 0;
-    double na = 0;
-    double nb = 0;
-
-    for (int i = 0; i < a.length; i++) {
+    final n = min(a.length, b.length);
+    for (int i = 0; i < n; i++) {
       dot += a[i] * b[i];
       na += a[i] * a[i];
       nb += b[i] * b[i];
     }
 
     final denom = sqrt(na) * sqrt(nb);
-    if (denom == 0) return -1;
-    return dot / denom;
-  }
+    if (denom == 0) return 1.0;
 
-  /* ===================== CLEANUP ===================== */
-
-  void dispose() {
-    try {
-      _interpreter?.close();
-      _interpreter = null;
-      print("🧹 FaceVerification disposed");
-    } catch (_) {}
+    final sim = dot / denom; // -1..1
+    return 1.0 - sim; // 0 is best
   }
 }

@@ -1,67 +1,37 @@
-import "package:camera/camera.dart";
+import 'dart:io';
+
+import 'package:camera/camera.dart';
 
 class CameraService {
-  CameraController? _controller;
+  CameraController? controller;
   List<CameraDescription>? _cameras;
-
-  CameraController? get controller => _controller;
 
   Future<void> initialize() async {
     _cameras = await availableCameras();
 
-    final back = _cameras!.firstWhere(
-      (c) => c.lensDirection == CameraLensDirection.back,
-      orElse: () => _cameras!.first,
-    );
+    if (_cameras == null || _cameras!.isEmpty) {
+      throw Exception("No cameras found");
+    }
 
-    _controller = CameraController(
-      back,
+    controller = CameraController(
+      _cameras!.first,
       ResolutionPreset.medium,
       enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.yuv420,
     );
 
-    await _controller!.initialize();
+    await controller!.initialize();
+    // ignore: avoid_print
+    print("✅ Camera initialized");
   }
 
-  Future<XFile?> captureXFile() async {
-    final c = _controller;
-    if (c == null) return null;
-    if (!c.value.isInitialized) return null;
-    if (c.value.isTakingPicture) return null;
-    return c.takePicture();
-  }
+  Future<File?> captureImage() async {
+    if (controller == null || !controller!.value.isInitialized) return null;
 
-  Future<void> switchCamera() async {
-    if (_cameras == null) return;
-    if (_cameras!.length < 2) return;
-    final c = _controller;
-    if (c == null) return;
-
-    final currentIndex = _cameras!.indexOf(c.description);
-    final nextIndex = (currentIndex + 1) % _cameras!.length;
-
-    await c.dispose();
-
-    _controller = CameraController(
-      _cameras![nextIndex],
-      ResolutionPreset.medium,
-      enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.yuv420,
-    );
-
-    await _controller!.initialize();
-  }
-
-  Future<void> setFlash(bool on) async {
-    final c = _controller;
-    if (c == null) return;
-    if (!c.value.isInitialized) return;
-    await c.setFlashMode(on ? FlashMode.torch : FlashMode.off);
+    final picture = await controller!.takePicture();
+    return File(picture.path);
   }
 
   void dispose() {
-    _controller?.dispose();
-    _controller = null;
+    controller?.dispose();
   }
 }
