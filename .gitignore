@@ -1,2 +1,6 @@
 *.tflite
 detectapp/assets/*.tflite
+facenet.tflite
+firebase-credentials.json
+subaina.jpg
+enrolled_faces/*.jpg

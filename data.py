@@ -28,7 +28,7 @@ ENROLLED_IMAGES_DIR = 'enrolled_faces'
 PEOPLE_TO_ENROLL = {
     'Subaina': 'subaina.jpg',
     'Person1': 'test.jpg',
-    'Person2':  'test2.jpg',
+    
 }
 
 # Create directory
