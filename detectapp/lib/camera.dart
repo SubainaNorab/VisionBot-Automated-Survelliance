@@ -1,37 +1,80 @@
-import 'dart:io';
-
 import 'package:camera/camera.dart';
+import 'package:flutter/material.dart';
 
 class CameraService {
-  CameraController? controller;
-  List<CameraDescription>? _cameras;
+  CameraController? _controller;
+  List<CameraDescription> _cameras = [];
 
-  Future<void> initialize() async {
+  CameraLensDirection _lensDirection = CameraLensDirection.back;
+
+  CameraController? get controller => _controller;
+  bool get isInitialized => _controller?.value.isInitialized ?? false;
+  CameraLensDirection get lensDirection => _lensDirection;
+
+  Future<void> initialize({
+    CameraLensDirection preferred = CameraLensDirection.back,
+  }) async {
     _cameras = await availableCameras();
 
-    if (_cameras == null || _cameras!.isEmpty) {
-      throw Exception("No cameras found");
-    }
+    _lensDirection = preferred;
 
-    controller = CameraController(
-      _cameras!.first,
+    final cam = _pickCamera(preferred) ?? _cameras.first;
+    await _start(cam);
+  }
+
+  CameraDescription? _pickCamera(CameraLensDirection lens) {
+    for (final c in _cameras) {
+      if (c.lensDirection == lens) return c;
+    }
+    return null;
+  }
+
+  Future<void> _start(CameraDescription cam) async {
+    await _controller?.dispose();
+
+    _controller = CameraController(
+      cam,
       ResolutionPreset.medium,
       enableAudio: false,
+      imageFormatGroup: ImageFormatGroup.jpeg,
     );
 
-    await controller!.initialize();
-    // ignore: avoid_print
-    print("✅ Camera initialized");
+    await _controller!.initialize();
   }
 
-  Future<File?> captureImage() async {
-    if (controller == null || !controller!.value.isInitialized) return null;
+  Future<void> switchCamera() async {
+    if (_cameras.isEmpty) return;
 
-    final picture = await controller!.takePicture();
-    return File(picture.path);
+    _lensDirection =
+        _lensDirection == CameraLensDirection.back
+            ? CameraLensDirection.front
+            : CameraLensDirection.back;
+
+    final cam = _pickCamera(_lensDirection) ?? _cameras.first;
+    await _start(cam);
   }
 
-  void dispose() {
-    controller?.dispose();
+  Future<XFile> takePicture() async {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) {
+      throw Exception('Camera not initialized');
+    }
+    if (c.value.isTakingPicture) {
+      throw Exception('Camera is busy');
+    }
+    return c.takePicture();
+  }
+
+  Widget buildPreview() {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return CameraPreview(c);
+  }
+
+  Future<void> dispose() async {
+    await _controller?.dispose();
+    _controller = null;
   }
 }

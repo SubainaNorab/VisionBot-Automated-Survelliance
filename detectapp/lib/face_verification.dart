@@ -1,5 +1,4 @@
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
@@ -11,25 +10,29 @@ import 'model/person.dart';
 class VerificationResult {
   final bool verified;
   final Person? person;
+  final double distance;
   final double confidence;
   final String message;
 
   const VerificationResult({
     required this.verified,
     required this.person,
+    required this.distance,
     required this.confidence,
     required this.message,
   });
 
   @override
   String toString() {
-    return 'VerificationResult(verified=$verified, person=${person?.name}, confidence=$confidence, message=$message)';
+    return 'VerificationResult(verified=$verified, person=${person?.name}, distance=$distance, confidence=$confidence, message=$message)';
   }
 }
 
 class FaceVerificationService {
-  static const String _collectionName = 'enrolled_faces';
-  static const String _modelAssetPath = 'assets/facenet.tflite';
+  static const String collectionName = 'enrolled_faces';
+  static const String modelAssetPath = 'assets/facenet.tflite';
+
+  static const double defaultThreshold = 0.90;
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
@@ -42,119 +45,137 @@ class FaceVerificationService {
   final List<Person> _enrolledPeople = [];
 
   int get enrolledCount => _enrolledPeople.length;
+  bool get isReady => _interpreter != null;
 
   Future<void> initialize() async {
+    _logStart('🚀', 'FaceVerification.initialize started');
     await _loadModel();
     await loadEnrolledPeople();
+    _logOk('✅', 'FaceVerification.initialize done');
   }
 
   void dispose() {
+    _logInfo('🧹', 'FaceVerification.dispose');
     _interpreter?.close();
     _interpreter = null;
   }
 
-  // Keep your old call style working
   VerificationResult verify(img.Image faceImage) {
     return verifyFace(faceImage);
   }
 
-  // New name, matches what you were calling in another main.dart
-  VerificationResult verifyFace(img.Image faceImage) {
+  VerificationResult verifyFace(
+    img.Image faceImage, {
+    double threshold = defaultThreshold,
+  }) {
     if (_interpreter == null) {
+      _logErr('❌', 'verifyFace called before model load');
       return const VerificationResult(
         verified: false,
         person: null,
+        distance: 999,
         confidence: 0.0,
         message: 'Model not loaded',
       );
     }
 
     if (_enrolledPeople.isEmpty) {
+      _logWarn('⚠️', 'No enrolled faces loaded');
       return const VerificationResult(
         verified: false,
         person: null,
+        distance: 999,
         confidence: 0.0,
         message: 'No enrolled faces found in Firestore',
       );
     }
 
+    _logInfo('🧠', 'Generating embedding...');
     final input = _preprocessFace(faceImage);
     final candidate = _getEmbedding(input);
 
-    double bestDistance = double.infinity;
     Person? bestPerson;
+    double bestDistance = double.infinity;
 
     for (final person in _enrolledPeople) {
-      for (final stored in person.embeddings) {
-        if (stored.length != _embeddingSize) continue;
+      final stored = person.embedding;
+      if (stored.length != _embeddingSize) continue;
 
-        final d = _cosineDistance(candidate, stored);
-        if (d < bestDistance) {
-          bestDistance = d;
-          bestPerson = person;
-        }
+      final d = _euclideanDistance(candidate, stored);
+      if (d < bestDistance) {
+        bestDistance = d;
+        bestPerson = person;
       }
     }
 
     if (bestPerson == null) {
+      _logErr('❌', 'No valid enrolled embeddings found');
       return const VerificationResult(
         verified: false,
         person: null,
+        distance: 999,
         confidence: 0.0,
         message: 'No valid enrolled embeddings',
       );
     }
 
-    // Cosine distance: 0 is identical, bigger is worse.
-    // Threshold depends on your model and preprocessing.
-    // Start here, then tune.
-    const threshold = 0.45;
-
     final verified = bestDistance <= threshold;
+    final confidence =
+        verified ? (1.0 - (bestDistance / threshold)).clamp(0.0, 1.0) : 0.0;
 
-    // Convert distance to confidence-like score (0..1), simple and stable.
-    final confidence = (1.0 - (bestDistance / threshold)).clamp(0.0, 1.0);
+    final msg =
+        verified
+            ? '✅ Verified: ${bestPerson.name} (dist=${bestDistance.toStringAsFixed(3)})'
+            : '❌ Not matched (dist=${bestDistance.toStringAsFixed(3)})';
+
+    _logInfo(verified ? '✅' : '❌', msg);
 
     return VerificationResult(
       verified: verified,
       person: verified ? bestPerson : null,
+      distance: bestDistance,
       confidence: confidence,
-      message:
-          verified
-              ? 'Verified: ${bestPerson.name}'
-              : 'Not matched (distance=${bestDistance.toStringAsFixed(3)})',
+      message: msg,
     );
   }
 
   Future<void> loadEnrolledPeople() async {
+    _logStart('📥', 'Loading enrolled people from Firestore...');
+
     _enrolledPeople.clear();
 
-    final snap = await _db.collection(_collectionName).get();
+    final snap = await _db.collection(collectionName).get();
 
     for (final doc in snap.docs) {
       final data = doc.data();
-      final p = Person.fromMap(doc.id, data);
 
-      // Filter out bad docs
-      if (p.name.trim().isEmpty) continue;
-      if (p.embeddings.isEmpty) continue;
-      if (p.embeddings.first.length != _embeddingSize) continue;
+      try {
+        final p = Person.fromFirestore(doc.id, data);
 
-      _enrolledPeople.add(p);
+        if (p.name.trim().isEmpty) continue;
+        if (p.embedding.isEmpty) continue;
+
+        if (p.embedding.length != _embeddingSize) {
+          _logWarn(
+            '⚠️',
+            'Skip ${p.name}. embedding len=${p.embedding.length}, expected=$_embeddingSize',
+          );
+          continue;
+        }
+
+        _enrolledPeople.add(p);
+      } catch (e) {
+        _logWarn('⚠️', 'Skip doc ${doc.id}. parse error: $e');
+      }
     }
 
-    // Debug print
-    // ignore: avoid_print
-    print('✅ Loaded enrolled people: ${_enrolledPeople.length}');
+    _logOk('✅', 'Loaded enrolled people: ${_enrolledPeople.length}');
   }
 
   Future<void> _loadModel() async {
-    // ignore: avoid_print
-    print('🚀 FaceVerification.initialize started');
+    _logStart('📦', 'Loading FaceNet model asset...');
 
-    // Do NOT load AssetManifest.json. It can fail in some setups.
-    // Just load the model directly.
-    final ByteData bytes = await rootBundle.load(_modelAssetPath);
+    final bytes = await rootBundle.load(modelAssetPath);
     final buffer = bytes.buffer.asUint8List();
 
     _interpreter = Interpreter.fromBuffer(
@@ -165,22 +186,16 @@ class FaceVerificationService {
     final inputShape = _interpreter!.getInputTensor(0).shape;
     final outputShape = _interpreter!.getOutputTensor(0).shape;
 
-    // input: [1, H, W, 3]
     _inputH = inputShape[1];
     _inputW = inputShape[2];
-
-    // output: [1, 128]
     _embeddingSize = outputShape.last;
 
-    // ignore: avoid_print
-    print('✅ Model loaded. input=$_inputH x $_inputW, emb=$_embeddingSize');
+    _logOk('✅', 'Model loaded. input=$_inputW x $_inputH, emb=$_embeddingSize');
   }
 
   List<List<List<List<double>>>> _preprocessFace(img.Image face) {
-    // resize to model input
     final resized = img.copyResize(face, width: _inputW, height: _inputH);
 
-    // float32 normalized 0..1
     final input = List.generate(
       1,
       (_) => List.generate(
@@ -193,13 +208,9 @@ class FaceVerificationService {
       for (int x = 0; x < _inputW; x++) {
         final p = resized.getPixel(x, y);
 
-        final r = p.r / 255.0;
-        final g = p.g / 255.0;
-        final b = p.b / 255.0;
-
-        input[0][y][x][0] = r;
-        input[0][y][x][1] = g;
-        input[0][y][x][2] = b;
+        input[0][y][x][0] = p.r / 255.0;
+        input[0][y][x][1] = p.g / 255.0;
+        input[0][y][x][2] = p.b / 255.0;
       }
     }
 
@@ -213,7 +224,6 @@ class FaceVerificationService {
 
     final emb = out[0];
 
-    // L2 normalize like your Python script
     final norm = sqrt(emb.fold(0.0, (s, v) => s + v * v));
     if (norm > 0) {
       for (int i = 0; i < emb.length; i++) {
@@ -224,22 +234,40 @@ class FaceVerificationService {
     return emb;
   }
 
-  double _cosineDistance(List<double> a, List<double> b) {
-    double dot = 0.0;
-    double na = 0.0;
-    double nb = 0.0;
-
+  double _euclideanDistance(List<double> a, List<double> b) {
     final n = min(a.length, b.length);
+    double sum = 0.0;
+
     for (int i = 0; i < n; i++) {
-      dot += a[i] * b[i];
-      na += a[i] * a[i];
-      nb += b[i] * b[i];
+      final d = a[i] - b[i];
+      sum += d * d;
     }
 
-    final denom = sqrt(na) * sqrt(nb);
-    if (denom == 0) return 1.0;
+    return sqrt(sum);
+  }
 
-    final sim = dot / denom; // -1..1
-    return 1.0 - sim; // 0 is best
+  void _logStart(String icon, String msg) {
+    // ignore: avoid_print
+    print('$icon $msg');
+  }
+
+  void _logOk(String icon, String msg) {
+    // ignore: avoid_print
+    print('$icon $msg');
+  }
+
+  void _logInfo(String icon, String msg) {
+    // ignore: avoid_print
+    print('$icon $msg');
+  }
+
+  void _logWarn(String icon, String msg) {
+    // ignore: avoid_print
+    print('$icon $msg');
+  }
+
+  void _logErr(String icon, String msg) {
+    // ignore: avoid_print
+    print('$icon $msg');
   }
 }

@@ -1,37 +1,38 @@
 import 'dart:io';
-
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 
 class FaceDetectionService {
-  static final FaceDetector _detector = FaceDetector(
-    options: FaceDetectorOptions(
-      performanceMode: FaceDetectorMode.fast,
-      enableContours: false,
-      enableLandmarks: false,
-    ),
-  );
+  final FaceDetector _detector;
 
-  static img.Image? detectAndCropFace(File imageFile) {
-    final inputImage = InputImage.fromFile(imageFile);
+  FaceDetectionService()
+    : _detector = FaceDetector(
+        options: FaceDetectorOptions(
+          performanceMode: FaceDetectorMode.fast,
+          enableTracking: false,
+          enableLandmarks: false,
+          enableContours: false,
+          minFaceSize: 0.15,
+        ),
+      );
 
-    // ML Kit is async, but your current main calls sync.
-    // Keep this method sync by doing a simple fallback crop if you want sync only.
-    // Better: use detectAndCropFaceAsync below.
-    return null;
-  }
+  Future<img.Image> detectAndCropFaceFromFile(
+    String filePath, {
+    double paddingPercent = 0.25,
+    int outputSize = 160,
+  }) async {
+    final file = File(filePath);
+    if (!await file.exists()) {
+      throw Exception('Image file not found: $filePath');
+    }
 
-  static Future<img.Image?> detectAndCropFaceAsync(File imageFile) async {
-    final inputImage = InputImage.fromFile(imageFile);
-    final faces = await _detector.processImage(inputImage);
+    final input = InputImage.fromFilePath(filePath);
+    final faces = await _detector.processImage(input);
 
-    if (faces.isEmpty) return null;
+    if (faces.isEmpty) {
+      throw Exception('No face detected in image');
+    }
 
-    final bytes = await imageFile.readAsBytes();
-    final decoded = img.decodeImage(bytes);
-    if (decoded == null) return null;
-
-    // pick the largest face
     Face best = faces.first;
     double bestArea = 0;
 
@@ -44,25 +45,50 @@ class FaceDetectionService {
       }
     }
 
-    final rect = best.boundingBox;
+    final bytes = await file.readAsBytes();
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) {
+      throw Exception('Failed to decode image bytes');
+    }
 
-    int x = rect.left.floor();
-    int y = rect.top.floor();
-    int w = rect.width.floor();
-    int h = rect.height.floor();
+    final box = best.boundingBox;
 
-    // padding
-    final pad = (w * 0.25).floor();
-    x = (x - pad).clamp(0, decoded.width - 1);
-    y = (y - pad).clamp(0, decoded.height - 1);
-    w = (w + pad * 2).clamp(1, decoded.width - x);
-    h = (h + pad * 2).clamp(1, decoded.height - y);
+    int x = box.left.round();
+    int y = box.top.round();
+    int w = box.width.round();
+    int h = box.height.round();
 
-    final cropped = img.copyCrop(decoded, x: x, y: y, width: w, height: h);
-    return cropped;
+    final padX = (w * paddingPercent).round();
+    final padY = (h * paddingPercent).round();
+
+    x = (x - padX).clamp(0, decoded.width - 1);
+    y = (y - padY).clamp(0, decoded.height - 1);
+
+    final x2 = (x + w + padX * 2).clamp(0, decoded.width);
+    final y2 = (y + h + padY * 2).clamp(0, decoded.height);
+
+    final cropW = (x2 - x).clamp(1, decoded.width);
+    final cropH = (y2 - y).clamp(1, decoded.height);
+
+    final faceCrop = img.copyCrop(
+      decoded,
+      x: x,
+      y: y,
+      width: cropW,
+      height: cropH,
+    );
+
+    final resized = img.copyResize(
+      faceCrop,
+      width: outputSize,
+      height: outputSize,
+      interpolation: img.Interpolation.average,
+    );
+
+    return resized;
   }
 
-  static Future<void> dispose() async {
+  Future<void> dispose() async {
     await _detector.close();
   }
 }
