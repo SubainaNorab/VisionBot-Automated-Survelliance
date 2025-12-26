@@ -10,9 +10,7 @@ import "firebase_options.dart";
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const MyApp());
 }
 
@@ -191,90 +189,92 @@ class _HomePageState extends State<HomePage> {
             icon: Icon(_flashOn ? Icons.flash_on : Icons.flash_off),
           ),
           IconButton(
-            onPressed: _loading
-                ? null
-                : () async {
-                    await _camera.switchCamera();
-                    setState(() {});
-                  },
+            onPressed:
+                _loading
+                    ? null
+                    : () async {
+                      await _camera.switchCamera();
+                      setState(() {});
+                    },
             icon: const Icon(Icons.cameraswitch),
           ),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                Expanded(
-                  child: Container(
-                    width: double.infinity,
-                    color: Colors.black,
-                    child:
-                        (controller != null && controller.value.isInitialized)
-                            ? CameraPreview(controller)
-                            : const Center(
+      body:
+          _loading
+              ? const Center(child: CircularProgressIndicator())
+              : Column(
+                children: [
+                  Expanded(
+                    child: Container(
+                      width: double.infinity,
+                      color: Colors.black,
+                      child:
+                          (controller != null && controller.value.isInitialized)
+                              ? CameraPreview(controller)
+                              : const Center(
                                 child: Text(
                                   "Camera not ready",
                                   style: TextStyle(color: Colors.white),
                                 ),
                               ),
+                    ),
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          color: Colors.grey.shade200,
-                        ),
-                        child: Text("Status: $_status"),
-                      ),
-                      const SizedBox(height: 10),
-                      if (_lastMatch.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
                         Container(
-                          padding: const EdgeInsets.all(12),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
                           decoration: BoxDecoration(
                             borderRadius: BorderRadius.circular(12),
-                            color: Colors.green.shade50,
-                            border: Border.all(color: Colors.green.shade200),
+                            color: Colors.grey.shade200,
                           ),
-                          child: Text("Matched: $_lastMatch"),
+                          child: Text("Status: $_status"),
                         ),
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton(
-                              onPressed: _verifyOnce,
-                              child: const Text("Verify"),
+                        const SizedBox(height: 10),
+                        if (_lastMatch.isNotEmpty)
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              color: Colors.green.shade50,
+                              border: Border.all(color: Colors.green.shade200),
                             ),
+                            child: Text("Matched: $_lastMatch"),
                           ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: _toggleAuto,
-                              child: Text(_autoScan ? "Auto ON" : "Auto OFF"),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ElevatedButton(
+                                onPressed: _verifyOnce,
+                                child: const Text("Verify"),
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      OutlinedButton(
-                        onPressed: _reloadFaces,
-                        child: const Text("Reload enrolled_faces"),
-                      ),
-                    ],
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: _toggleAuto,
+                                child: Text(_autoScan ? "Auto ON" : "Auto OFF"),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        OutlinedButton(
+                          onPressed: _reloadFaces,
+                          child: const Text("Reload enrolled_faces"),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
+                ],
+              ),
     );
   }
 }
