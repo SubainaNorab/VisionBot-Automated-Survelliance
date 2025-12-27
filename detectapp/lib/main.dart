@@ -1,6 +1,7 @@
+// main.dart with alert integration
+
 import 'dart:async';
 import 'package:flutter/material.dart';
-
 import 'package:camera/camera.dart';
 import 'package:firebase_core/firebase_core.dart';
 
@@ -8,6 +9,7 @@ import 'camera.dart';
 import 'face_detector.dart';
 import 'face_verification.dart';
 import 'firebase_options.dart';
+import 'alert_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,14 +46,13 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
   final CameraService _camera = CameraService();
   final FaceDetectionService _detector = FaceDetectionService();
   final FaceVerificationService _verifier = FaceVerificationService();
+  final AlertService _alertService = AlertService(); // ← ADD THIS LINE
 
   bool _booting = true;
   bool _processing = false;
 
   bool _autoVerify = true;
   Timer? _timer;
-
-  double _threshold = FaceVerificationService.defaultThreshold;
 
   String _status = 'Starting...';
   String _lastMatch = '';
@@ -65,7 +66,7 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
   Future<void> _boot() async {
     setState(() {
       _booting = true;
-      _status = 'Initializing...';
+      _status = 'Initializing... ';
     });
 
     try {
@@ -100,10 +101,11 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
     });
   }
 
+  // ========== THIS IS THE UPDATED METHOD ==========
   Future<void> _verifyOnce() async {
     setState(() {
       _processing = true;
-      _status = 'Capturing...';
+      _status = 'Capturing... ';
     });
 
     try {
@@ -119,7 +121,36 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
         _status = 'Verifying...';
       });
 
-      final result = await _verifier.verifyFace(face, threshold: _threshold);
+      // Your original verification call
+      final result = _verifier.verifyFace(face);
+
+      // ========== ALERT INTEGRATION - ADDED HERE ==========
+      if (!result.verified) {
+        // Get camera lens direction
+        final lensName =
+            _camera.lensDirection == CameraLensDirection.front
+                ? 'front'
+                : 'back';
+
+        // Send alert to Firebase
+        try {
+          await _alertService.createUnknownAlert(
+            distance: 0.0, // Your original result doesn't have this
+            threshold: FaceVerificationService.threshold,
+            lens: lensName,
+            bestCandidate: '', // Your original result doesn't have this
+            enrolledCount: 0, // Your original doesn't expose this
+            note: 'Unknown face detected: ${result.message}',
+          );
+
+          print('🚨 Alert sent to Firebase:  Unknown face detected! ');
+        } catch (alertError) {
+          print('⚠️ Failed to send alert:  $alertError');
+        }
+      } else {
+        print('✅ Verified:  ${result.person?.name}');
+      }
+      // ====================================================
 
       setState(() {
         _status = result.message;
@@ -140,11 +171,12 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
       }
     }
   }
+  // =================================================
 
   Future<void> _toggleCamera() async {
     try {
       setState(() {
-        _status = 'Switching camera...';
+        _status = 'Switching camera... ';
       });
       await _camera.switchCamera();
       setState(() {
@@ -222,23 +254,10 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
                 ),
 
                 const SizedBox(height: 8),
-                Text('Threshold: ${_threshold.toStringAsFixed(2)}'),
-                Slider(
-                  min: 0.60,
-                  max: 1.20,
-                  divisions: 60,
-                  value: _threshold,
-                  onChanged: (v) {
-                    setState(() {
-                      _threshold = v;
-                    });
-                  },
-                ),
 
-                const SizedBox(height: 8),
                 ElevatedButton(
                   onPressed: _processing ? null : _verifyOnce,
-                  child: Text(_processing ? 'Processing...' : 'Verify Now'),
+                  child: Text(_processing ? 'Processing.. .' : 'Verify Now'),
                 ),
               ],
             ),
