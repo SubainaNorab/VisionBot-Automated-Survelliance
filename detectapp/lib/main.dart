@@ -51,7 +51,7 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
   bool _autoVerify = true;
   Timer? _timer;
 
-  double _threshold = FaceVerificationService.defaultThreshold;
+  // double _threshold = FaceVerificationService.defaultThreshold;
 
   String _status = 'Starting...';
   String _lastMatch = '';
@@ -119,7 +119,7 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
         _status = 'Verifying...';
       });
 
-      final result = await _verifier.verifyFace(face, threshold: _threshold);
+      final result = await _verifier.verifyFace(face);
 
       setState(() {
         _status = result.message;
@@ -222,19 +222,19 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
                 ),
 
                 const SizedBox(height: 8),
-                Text('Threshold: ${_threshold.toStringAsFixed(2)}'),
-                Slider(
-                  min: 0.60,
-                  max: 1.20,
-                  divisions: 60,
-                  value: _threshold,
-                  onChanged: (v) {
-                    setState(() {
-                      _threshold = v;
-                    });
-                  },
-                ),
 
+                // Text('Threshold: ${_threshold.toStringAsFixed(2)}'),
+                // Slider(
+                //   min: 0.60,
+                //   max: 1.20,
+                //   divisions: 60,
+                //   value: _threshold,
+                //   onChanged: (v) {
+                //     setState(() {
+                //       _threshold = v;
+                //     });
+                //   },
+                // ),
                 const SizedBox(height: 8),
                 ElevatedButton(
                   onPressed: _processing ? null : _verifyOnce,
