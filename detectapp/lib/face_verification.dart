@@ -1,8 +1,5 @@
-<<<<<<< HEAD
 // right verify
 
-=======
->>>>>>> bd8890b140c39af11933fb94682dd474b101df7c
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
@@ -92,10 +89,9 @@ class FaceVerificationService {
       verified: matched,
       person: matched ? bestPerson : null,
       confidence: confidence,
-      message:
-          matched
-              ? 'Verified ${bestPerson!.name}'
-              : 'Not matched (distance=${bestDist.toStringAsFixed(3)})',
+      message: matched
+          ? 'Verified ${bestPerson!.name}'
+          : 'Not matched (distance=${bestDist.toStringAsFixed(3)})',
     );
   }
 
