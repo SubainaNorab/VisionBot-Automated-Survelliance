@@ -9,11 +9,8 @@ class AlertService {
   int _cooldownMs = 2500;
 
   Future<void> createUnknownAlert({
-    required double distance,
     required double threshold,
     required String lens,
-    String bestCandidate = '',
-    int enrolledCount = 0,
     String note = '',
   }) async {
     final now = DateTime.now();
@@ -31,11 +28,8 @@ class AlertService {
       'type': 'unknown_face',
       'created_at': FieldValue.serverTimestamp(),
       'created_at_local': now.toIso8601String(),
-      'distance': distance,
       'threshold': threshold,
       'lens': lens,
-      'best_candidate': bestCandidate,
-      'enrolled_count': enrolledCount,
       'note': note,
     });
   }
