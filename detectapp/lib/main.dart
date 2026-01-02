@@ -54,6 +54,11 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
   bool _autoVerify = true;
   Timer? _timer;
 
+<<<<<<< HEAD
+=======
+  // double _threshold = FaceVerificationService.defaultThreshold;
+
+>>>>>>> bd8890b140c39af11933fb94682dd474b101df7c
   String _status = 'Starting...';
   String _lastMatch = '';
 
@@ -121,6 +126,7 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
         _status = 'Verifying...';
       });
 
+<<<<<<< HEAD
       // Your original verification call
       final result = _verifier.verifyFace(face);
 
@@ -151,6 +157,9 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
         print('✅ Verified:  ${result.person?.name}');
       }
       // ====================================================
+=======
+      final result = await _verifier.verifyFace(face);
+>>>>>>> bd8890b140c39af11933fb94682dd474b101df7c
 
       setState(() {
         _status = result.message;
@@ -255,6 +264,22 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
 
                 const SizedBox(height: 8),
 
+<<<<<<< HEAD
+=======
+                // Text('Threshold: ${_threshold.toStringAsFixed(2)}'),
+                // Slider(
+                //   min: 0.60,
+                //   max: 1.20,
+                //   divisions: 60,
+                //   value: _threshold,
+                //   onChanged: (v) {
+                //     setState(() {
+                //       _threshold = v;
+                //     });
+                //   },
+                // ),
+                const SizedBox(height: 8),
+>>>>>>> bd8890b140c39af11933fb94682dd474b101df7c
                 ElevatedButton(
                   onPressed: _processing ? null : _verifyOnce,
                   child: Text(_processing ? 'Processing.. .' : 'Verify Now'),

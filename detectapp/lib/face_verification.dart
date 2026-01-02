@@ -1,5 +1,8 @@
+<<<<<<< HEAD
 // right verify
 
+=======
+>>>>>>> bd8890b140c39af11933fb94682dd474b101df7c
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
