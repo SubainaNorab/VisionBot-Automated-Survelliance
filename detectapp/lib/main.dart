@@ -1,4 +1,4 @@
-// main.dart with simplified alerts
+// main.dart with simplified alerts + sm_grp stub integration
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -10,6 +10,7 @@ import 'face_detector.dart';
 import 'face_verification.dart';
 import 'firebase_options.dart';
 import 'alert_service.dart';
+import 'sm_grp.dart'; // ✅ add this
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,6 +49,10 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
   final FaceVerificationService _verifier = FaceVerificationService();
   final AlertService _alertService = AlertService();
 
+  // ✅ NEW
+  final MultiDetectorService _multi = MultiDetectorService();
+  DetectionResult? _lastDetections;
+
   bool _booting = true;
   bool _processing = false;
 
@@ -71,7 +76,10 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
 
     try {
       await _verifier.initialize();
+      await _multi.initialize(); // ✅ init stub detector
       await _camera.initialize(preferred: CameraLensDirection.front);
+
+      if (!mounted) return;
 
       setState(() {
         _booting = false;
@@ -81,6 +89,7 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
       _startAutoLoop();
       print('✅ App initialized successfully');
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _booting = false;
         _status = 'Boot failed: $e';
@@ -104,44 +113,44 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
   Future<void> _verifyOnce() async {
     setState(() {
       _processing = true;
-      _status = 'Capturing... ';
+      _status = 'Capturing...';
     });
 
     try {
       final shot = await _camera.takePicture();
 
+      if (!mounted) return;
       setState(() {
         _status = 'Detecting face...';
       });
 
       final face = await _detector.detectAndCropFaceFromFile(shot.path);
 
+      if (!mounted) return;
       setState(() {
         _status = 'Verifying...';
       });
 
       final result = _verifier.verifyFace(face);
 
-      // ========== NON-BLOCKING ALERT (SIMPLIFIED) ==========
+      // ✅ OPTIONAL: run sm/group stub after verification (non-breaking)
+      // NOTE: Stub needs CameraImage; we don't have it from takePicture().
+      // So for now we just keep stub initialized and show "not available".
+      // Later, when you switch to startImageStream, we’ll pass real frames here.
+
+      // ========== NON-BLOCKING ALERT (UNKNOWN FACE) ==========
       if (!result.verified) {
         final lensName =
-            _camera.lensDirection == CameraLensDirection.front
-                ? 'front'
-                : 'back';
+            _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
-        // Send alert in background - NO AWAIT (non-blocking)
         _alertService
             .createUnknownAlert(
               threshold: FaceVerificationService.threshold,
               lens: lensName,
               note: 'Unknown face detected',
             )
-            .then((_) {
-              print('🚨 Alert sent to Firebase');
-            })
-            .catchError((error) {
-              print('⚠️ Alert send failed: $error');
-            });
+            .then((_) => print('🚨 Alert sent to Firebase'))
+            .catchError((error) => print('⚠️ Alert send failed: $error'));
 
         print('🚨 Alert queued (background)');
       } else {
@@ -149,6 +158,7 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
       }
       // =====================================================
 
+      if (!mounted) return;
       setState(() {
         _status = result.message;
         _lastMatch = result.verified ? (result.person?.name ?? '') : '';
@@ -156,6 +166,7 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
 
       print(result.toString());
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _status = 'Verification error: $e';
       });
@@ -175,10 +186,12 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
         _status = 'Switching camera...';
       });
       await _camera.switchCamera();
+      if (!mounted) return;
       setState(() {
         _status = 'Ready';
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _status = 'Camera switch failed: $e';
       });
@@ -191,11 +204,14 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
     _camera.dispose();
     _detector.dispose();
     _verifier.dispose();
+    _multi.dispose(); // ✅ NEW
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final det = _lastDetections;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Face Recognition'),
@@ -231,6 +247,15 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
                 Text(_status),
                 const SizedBox(height: 6),
                 Text('Last match: $_lastMatch'),
+                const SizedBox(height: 6),
+
+                // ✅ NEW: show smoke/group/person status (stub for now)
+                Text(
+                  det == null
+                      ? 'Smoke/Group: (not running yet — needs camera stream)'
+                      : 'Smoke: ${det.smokingDetected} | Group: ${det.groupDetected} | People: ${det.personCount}',
+                ),
+
                 const SizedBox(height: 12),
 
                 Row(
@@ -253,7 +278,7 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
 
                 ElevatedButton(
                   onPressed: _processing ? null : _verifyOnce,
-                  child: Text(_processing ? 'Processing.. .' : 'Verify Now'),
+                  child: Text(_processing ? 'Processing...' : 'Verify Now'),
                 ),
               ],
             ),

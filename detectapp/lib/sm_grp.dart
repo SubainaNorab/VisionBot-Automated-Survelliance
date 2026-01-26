@@ -1,10 +1,9 @@
 // lib/sm_grp.dart
-// Smoking and Group detection service (stub version)
+// Smoking and Group detection service (safe stub, non-breaking)
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 
-/// Result from multi-detection (smoking, groups, people count)
 class DetectionResult {
   final bool smokingDetected;
   final bool groupDetected;
@@ -22,50 +21,44 @@ class DetectionResult {
   }
 }
 
-/// Multi-detector service for smoking and group detection
-/// This is a stub version that doesn't require TFLite models
 class MultiDetectorService {
   bool _isInitialized = false;
 
-  /// Initialize the detector service
   Future<void> initialize() async {
     try {
-      // Stub - no actual model loading required
       _isInitialized = true;
       debugPrint('✅ MultiDetectorService initialized (stub mode)');
-      debugPrint('   Note: Smoking/group detection disabled (no models)');
     } catch (e) {
-      debugPrint('❌ MultiDetectorService initialization failed: $e');
       _isInitialized = false;
+      debugPrint('❌ MultiDetectorService init failed: $e');
     }
   }
 
-  /// Detect smoking, groups, and count people
-  /// Returns empty results in stub mode
+  /// Stub logic:
+  /// - personCount = 0 (until you add a real people counter model)
+  /// - groupDetected = personCount >= 3
+  /// - smokingDetected = false (until you add a smoke model)
   Future<DetectionResult> detectAll(CameraImage image) async {
     if (!_isInitialized) {
-      return DetectionResult(
-        smokingDetected: false,
-        groupDetected: false,
-        personCount: 0,
-      );
+      return DetectionResult(smokingDetected: false, groupDetected: false, personCount: 0);
     }
 
-    // Stub implementation - returns no detections
-    // You can add actual TFLite model inference here later
+    // TODO later: run models here
+    final personCount = 0;
+    final groupDetected = personCount >= 3;
+    final smokingDetected = false;
+
     return DetectionResult(
-      smokingDetected: false,
-      groupDetected: false,
-      personCount: 0,
+      smokingDetected: smokingDetected,
+      groupDetected: groupDetected,
+      personCount: personCount,
     );
   }
 
-  /// Clean up resources
   void dispose() {
     _isInitialized = false;
     debugPrint('✅ MultiDetectorService disposed');
   }
 
-  /// Check if service is ready
   bool get isInitialized => _isInitialized;
 }
