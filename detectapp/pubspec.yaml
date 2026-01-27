@@ -27,3 +27,5 @@ flutter:
   uses-material-design: true
   assets:
     - assets/facenet.tflite
+    - assets/yolov8n.tflite
+    - assets/smoking.tflite
