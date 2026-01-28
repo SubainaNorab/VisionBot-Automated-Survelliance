@@ -1,3 +1,5 @@
+// camera
+import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
@@ -5,20 +7,18 @@ class CameraService {
   CameraController? _controller;
   List<CameraDescription> _cameras = [];
 
-  CameraLensDirection _lensDirection = CameraLensDirection.back;
-
-  bool _isStreaming = false;
-  bool get isStreaming => _isStreaming;
+  CameraLensDirection _lensDirection = CameraLensDirection.front;
 
   CameraController? get controller => _controller;
   bool get isInitialized => _controller?.value.isInitialized ?? false;
   CameraLensDirection get lensDirection => _lensDirection;
 
   Future<void> initialize({
-    CameraLensDirection preferred = CameraLensDirection.back,
+    CameraLensDirection preferred = CameraLensDirection.front,
   }) async {
     _cameras = await availableCameras();
     _lensDirection = preferred;
+
     final cam = _pickCamera(preferred) ?? _cameras.first;
     await _start(cam);
   }
@@ -37,21 +37,14 @@ class CameraService {
       cam,
       ResolutionPreset.medium,
       enableAudio: false,
-      // IMPORTANT for CameraImage stream:
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
 
     await _controller!.initialize();
-    _isStreaming = false;
   }
 
   Future<void> switchCamera() async {
     if (_cameras.isEmpty) return;
-
-    final wasStreaming = _isStreaming;
-    if (wasStreaming) {
-      await stopImageStream();
-    }
 
     _lensDirection =
         _lensDirection == CameraLensDirection.back
@@ -60,8 +53,6 @@ class CameraService {
 
     final cam = _pickCamera(_lensDirection) ?? _cameras.first;
     await _start(cam);
-
-    // NOTE: main.dart will restart streaming (cleaner control)
   }
 
   Future<XFile> takePicture() async {
@@ -75,31 +66,26 @@ class CameraService {
     return c.takePicture();
   }
 
-  Future<void> startImageStream(Function(CameraImage image) onFrame) async {
+  /// ✅ REAL-TIME STREAM
+  Future<void> startStream(
+    Future<void> Function(CameraImage image) onFrame,
+  ) async {
     final c = _controller;
     if (c == null || !c.value.isInitialized) {
       throw Exception('Camera not initialized');
     }
-    if (_isStreaming) return;
+    if (c.value.isStreamingImages) return;
 
-    await c.startImageStream((image) {
-      onFrame(image);
+    await c.startImageStream((image) async {
+      await onFrame(image);
     });
-
-    _isStreaming = true;
   }
 
-  Future<void> stopImageStream() async {
+  Future<void> stopStream() async {
     final c = _controller;
     if (c == null) return;
-    if (!_isStreaming) return;
-
-    try {
-      await c.stopImageStream();
-    } catch (_) {
-      // ignore
-    }
-    _isStreaming = false;
+    if (!c.value.isStreamingImages) return;
+    await c.stopImageStream();
   }
 
   Widget buildPreview() {
@@ -111,11 +97,8 @@ class CameraService {
   }
 
   Future<void> dispose() async {
-    try {
-      await stopImageStream();
-    } catch (_) {}
+    await stopStream();
     await _controller?.dispose();
     _controller = null;
-    _isStreaming = false;
   }
 }

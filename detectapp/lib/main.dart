@@ -1,27 +1,21 @@
-// main.dart with simplified alerts + smoke/group detection
+// lib/main.dart
+// Face verification + real-time YOLO people/group detection + Firebase alerts
 
 import 'dart:async';
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:image/image.dart' as img;
 
 import 'camera.dart';
 import 'face_detector.dart';
 import 'face_verification.dart';
 import 'firebase_options.dart';
 import 'alert_service.dart';
-import 'sm_grp.dart'; // ✅ ADDED
+import 'sm_grp.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  print('Initializing Firebase...');
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  print('✅ Firebase initialized');
-
   runApp(const MyApp());
 }
 
@@ -51,20 +45,22 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
   final FaceDetectionService _detector = FaceDetectionService();
   final FaceVerificationService _verifier = FaceVerificationService();
   final AlertService _alertService = AlertService();
-
-  final MultiDetectorService _multi = MultiDetectorService(); // ✅ ADDED
+  final MultiDetectorService _multi = MultiDetectorService();
 
   bool _booting = true;
-  bool _processing = false;
 
+  // Face verify (photo-based)
+  bool _processingFace = false;
   bool _autoVerify = true;
   Timer? _timer;
 
   String _status = 'Starting...';
   String _lastMatch = '';
 
-  // ✅ ADDED: show smoke/group result in UI
-  String _smokeGroupStatus = '';
+  // YOLO / Smoking / Group (stream-based)
+  String _smokeGroupStatus = 'People: - | Group: - | Smoking: -';
+  bool _processingStream = false;
+  int _frameSkip = 0;
 
   @override
   void initState() {
@@ -80,22 +76,51 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
 
     try {
       await _verifier.initialize();
-      await _multi.initialize(); // ✅ ADDED
+      await _multi.initialize();
       await _camera.initialize(preferred: CameraLensDirection.front);
 
+      // ✅ start stream for YOLO/group/smoke detection
+      await _camera.startStream(_onFrame);
+
+      if (!mounted) return;
       setState(() {
         _booting = false;
         _status = 'Ready';
       });
 
       _startAutoLoop();
-      print('✅ App initialized successfully');
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _booting = false;
         _status = 'Boot failed: $e';
       });
-      print('❌ Boot failed: $e');
+    }
+  }
+
+  // ✅ REAL-TIME FRAME HANDLER (YOLO + smoke)
+  Future<void> _onFrame(CameraImage image) async {
+    if (!mounted) return;
+    if (_processingStream) return;
+    if (!_multi.isInitialized) return;
+
+    // ✅ process only every Nth frame to avoid lag (adjust 4~10)
+    _frameSkip++;
+    if (_frameSkip % 6 != 0) return;
+
+    _processingStream = true;
+    try {
+      final det = await _multi.detectAll(image);
+      if (!mounted) return;
+
+      setState(() {
+        _smokeGroupStatus =
+            'People: ${det.personCount} | Group: ${det.groupDetected ? "YES" : "NO"} | Smoking: ${det.smokingDetected ? "YES" : "NO"}';
+      });
+    } catch (_) {
+      // keep silent to avoid log spam
+    } finally {
+      _processingStream = false;
     }
   }
 
@@ -106,103 +131,74 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
     _timer = Timer.periodic(const Duration(seconds: 2), (_) async {
       if (!mounted) return;
       if (_booting) return;
-      if (_processing) return;
+      if (_processingFace) return;
       await _verifyOnce();
     });
   }
 
   Future<void> _verifyOnce() async {
+    if (_processingFace) return;
+
     setState(() {
-      _processing = true;
-      _status = 'Capturing... ';
+      _processingFace = true;
+      _status = 'Capturing face...';
     });
 
     try {
+      // Important: taking picture pauses stream on some devices,
+      // but your CameraService uses stream + takePicture together.
+      // If it causes issues, we will stop stream before capture then restart.
       final shot = await _camera.takePicture();
 
-      // ✅ ADDED: run smoke/group on SAME captured image (non-breaking)
-      try {
-        final bytes = await shot.readAsBytes();
-        final decoded = img.decodeImage(bytes);
-        if (decoded != null && _multi.isInitialized) {
-          final det = await _multi.detectAllFromImage(decoded);
-          setState(() {
-            _smokeGroupStatus =
-                'People: ${det.personCount} | Group: ${det.groupDetected ? "YES" : "NO"} | Smoking: ${det.smokingDetected ? "YES" : "NO"}';
-          });
-          print('🧯👥 $det');
-        } else {
-          setState(() => _smokeGroupStatus = 'Smoke/Group: image decode failed');
-        }
-      } catch (e) {
-        setState(() => _smokeGroupStatus = 'Smoke/Group error: $e');
-      }
-
-      setState(() {
-        _status = 'Detecting face...';
-      });
+      if (!mounted) return;
+      setState(() => _status = 'Detecting face...');
 
       final face = await _detector.detectAndCropFaceFromFile(shot.path);
 
-      setState(() {
-        _status = 'Verifying...';
-      });
+      if (!mounted) return;
+      setState(() => _status = 'Verifying...');
 
       final result = _verifier.verifyFace(face);
 
-      // ========== NON-BLOCKING ALERT (UNKNOWN FACE ONLY) ==========
+      // ✅ Unknown alert (non-blocking)
       if (!result.verified) {
         final lensName =
             _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
-        _alertService
-            .createUnknownAlert(
-              threshold: FaceVerificationService.threshold,
-              lens: lensName,
-              note: 'Unknown face detected',
-            )
-            .then((_) => print('🚨 Alert sent to Firebase'))
-            .catchError((error) => print('⚠️ Alert send failed: $error'));
-
-        print('🚨 Alert queued (background)');
-      } else {
-        print('✅ Verified: ${result.person?.name}');
+        _alertService.createUnknownAlert(
+          threshold: FaceVerificationService.threshold,
+          lens: lensName,
+          note: 'Unknown face detected',
+        ).catchError((_) {});
       }
-      // =====================================================
 
+      if (!mounted) return;
       setState(() {
         _status = result.message;
         _lastMatch = result.verified ? (result.person?.name ?? '') : '';
       });
-
-      print(result.toString());
     } catch (e) {
-      setState(() {
-        _status = 'Verification error: $e';
-      });
-      print('❌ Verification error: $e');
+      if (!mounted) return;
+      setState(() => _status = 'Verification error: $e');
     } finally {
-      if (mounted) {
-        setState(() {
-          _processing = false;
-        });
-      }
+      if (!mounted) return;
+      setState(() => _processingFace = false);
     }
   }
 
   Future<void> _toggleCamera() async {
     try {
-      setState(() {
-        _status = 'Switching camera...';
-      });
+      setState(() => _status = 'Switching camera...');
+
+      await _camera.stopStream();
       await _camera.switchCamera();
-      setState(() {
-        _status = 'Ready';
-      });
+      await _camera.startStream(_onFrame);
+
+      if (!mounted) return;
+      setState(() => _status = 'Ready');
     } catch (e) {
-      setState(() {
-        _status = 'Camera switch failed: $e';
-      });
+      if (!mounted) return;
+      setState(() => _status = 'Camera switch failed: $e');
     }
   }
 
@@ -212,7 +208,7 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
     _camera.dispose();
     _detector.dispose();
     _verifier.dispose();
-    _multi.dispose(); // ✅ ADDED
+    _multi.dispose();
     super.dispose();
   }
 
@@ -227,7 +223,7 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
             icon: const Icon(Icons.cameraswitch),
           ),
           IconButton(
-            onPressed: _processing ? null : _verifyOnce,
+            onPressed: _processingFace ? null : _verifyOnce,
             icon: const Icon(Icons.play_arrow),
           ),
         ],
@@ -254,17 +250,14 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
                 const SizedBox(height: 6),
                 Text('Last match: $_lastMatch'),
                 const SizedBox(height: 6),
-                Text(_smokeGroupStatus), // ✅ ADDED
+                Text(_smokeGroupStatus),
                 const SizedBox(height: 12),
-
                 Row(
                   children: [
                     Switch(
                       value: _autoVerify,
                       onChanged: (v) {
-                        setState(() {
-                          _autoVerify = v;
-                        });
+                        setState(() => _autoVerify = v);
                         _startAutoLoop();
                       },
                     ),
@@ -272,12 +265,10 @@ class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
                     const Text('Auto verify'),
                   ],
                 ),
-
                 const SizedBox(height: 8),
-
                 ElevatedButton(
-                  onPressed: _processing ? null : _verifyOnce,
-                  child: Text(_processing ? 'Processing.. .' : 'Verify Now'),
+                  onPressed: _processingFace ? null : _verifyOnce,
+                  child: Text(_processingFace ? 'Processing...' : 'Verify Now'),
                 ),
               ],
             ),
