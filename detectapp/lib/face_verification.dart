@@ -38,7 +38,7 @@ class FaceVerificationService {
 
   final List<Person> _people = [];
 
-  // ================= INIT =================
+
 
   Future<void> initialize() async {
     print('🚀 FaceVerification initialize');
@@ -51,7 +51,6 @@ class FaceVerificationService {
     _interpreter = null;
   }
 
-  // ================= VERIFY =================
 
   VerificationResult verifyFace(img.Image face) {
     if (_interpreter == null) {
@@ -95,7 +94,6 @@ class FaceVerificationService {
     );
   }
 
-  // ================= FIRESTORE =================
 
   Future<void> _loadPeople() async {
     _people.clear();
@@ -113,7 +111,6 @@ class FaceVerificationService {
     print('📦 Loaded ${_people.length} enrolled people');
   }
 
-  // ================= MODEL =================
 
   Future<void> _loadModel() async {
     final bytes = await rootBundle.load(_modelPath);
@@ -132,7 +129,6 @@ class FaceVerificationService {
     print('✅ Model loaded input=$_inputW x $_inputH emb=$_embSize');
   }
 
-  // ================= PREPROCESS =================
 
   List<List<List<List<double>>>> _preprocess(img.Image face) {
     final resized = img.copyResize(face, width: _inputW, height: _inputH);
@@ -181,7 +177,6 @@ class FaceVerificationService {
     return emb;
   }
 
-  // ================= METRIC =================
 
   double _cosineDistance(List<double> a, List<double> b) {
     double dot = 0, na = 0, nb = 0;

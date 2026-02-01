@@ -1,280 +1,271 @@
-// lib/main.dart
-// Face verification + real-time YOLO people/group detection + Firebase alerts
+// lib/main.dart (CLEAN - UI only)
 
-import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:camera/camera.dart';
 import 'package:firebase_core/firebase_core.dart';
 
-import 'camera.dart';
-import 'face_detector.dart';
-import 'face_verification.dart';
 import 'firebase_options.dart';
-import 'alert_service.dart';
-import 'sm_grp.dart';
+import 'survelliance_controller.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  runApp(const MyApp());
+  runApp(const VisionBot());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class VisionBot extends StatelessWidget {
+  const VisionBot({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Face Recognition',
+      title: 'VisionBot Surveillance',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(useMaterial3: true),
-      home: const FaceRecognitionScreen(),
+      theme: ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+      ),
+      home: const SurveillanceScreen(),
     );
   }
 }
 
-class FaceRecognitionScreen extends StatefulWidget {
-  const FaceRecognitionScreen({super.key});
+class SurveillanceScreen extends StatefulWidget {
+  const SurveillanceScreen({super.key});
 
   @override
-  State<FaceRecognitionScreen> createState() => _FaceRecognitionScreenState();
+  State<SurveillanceScreen> createState() => _SurveillanceScreenState();
 }
 
-class _FaceRecognitionScreenState extends State<FaceRecognitionScreen> {
-  final CameraService _camera = CameraService();
-  final FaceDetectionService _detector = FaceDetectionService();
-  final FaceVerificationService _verifier = FaceVerificationService();
-  final AlertService _alertService = AlertService();
-  final MultiDetectorService _multi = MultiDetectorService();
-
-  bool _booting = true;
-
-  // Face verify (photo-based)
-  bool _processingFace = false;
-  bool _autoVerify = true;
-  Timer? _timer;
-
-  String _status = 'Starting...';
-  String _lastMatch = '';
-
-  // YOLO / Smoking / Group (stream-based)
-  String _smokeGroupStatus = 'People: - | Group: - | Smoking: -';
-  bool _processingStream = false;
-  int _frameSkip = 0;
+class _SurveillanceScreenState extends State<SurveillanceScreen> {
+  late final SurveillanceController _controller;
 
   @override
   void initState() {
     super.initState();
-    _boot();
-  }
-
-  Future<void> _boot() async {
-    setState(() {
-      _booting = true;
-      _status = 'Initializing...';
-    });
-
-    try {
-      await _verifier.initialize();
-      await _multi.initialize();
-      await _camera.initialize(preferred: CameraLensDirection.front);
-
-      // ✅ start stream for YOLO/group/smoke detection
-      await _camera.startStream(_onFrame);
-
-      if (!mounted) return;
-      setState(() {
-        _booting = false;
-        _status = 'Ready';
-      });
-
-      _startAutoLoop();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _booting = false;
-        _status = 'Boot failed: $e';
-      });
-    }
-  }
-
-  // ✅ REAL-TIME FRAME HANDLER (YOLO + smoke)
-  Future<void> _onFrame(CameraImage image) async {
-    if (!mounted) return;
-    if (_processingStream) return;
-    if (!_multi.isInitialized) return;
-
-    // ✅ process only every Nth frame to avoid lag (adjust 4~10)
-    _frameSkip++;
-    if (_frameSkip % 6 != 0) return;
-
-    _processingStream = true;
-    try {
-      final det = await _multi.detectAll(image);
-      if (!mounted) return;
-
-      setState(() {
-        _smokeGroupStatus =
-            'People: ${det.personCount} | Group: ${det.groupDetected ? "YES" : "NO"} | Smoking: ${det.smokingDetected ? "YES" : "NO"}';
-      });
-    } catch (_) {
-      // keep silent to avoid log spam
-    } finally {
-      _processingStream = false;
-    }
-  }
-
-  void _startAutoLoop() {
-    _timer?.cancel();
-    if (!_autoVerify) return;
-
-    _timer = Timer.periodic(const Duration(seconds: 2), (_) async {
-      if (!mounted) return;
-      if (_booting) return;
-      if (_processingFace) return;
-      await _verifyOnce();
-    });
-  }
-
-  Future<void> _verifyOnce() async {
-    if (_processingFace) return;
-
-    setState(() {
-      _processingFace = true;
-      _status = 'Capturing face...';
-    });
-
-    try {
-      // Important: taking picture pauses stream on some devices,
-      // but your CameraService uses stream + takePicture together.
-      // If it causes issues, we will stop stream before capture then restart.
-      final shot = await _camera.takePicture();
-
-      if (!mounted) return;
-      setState(() => _status = 'Detecting face...');
-
-      final face = await _detector.detectAndCropFaceFromFile(shot.path);
-
-      if (!mounted) return;
-      setState(() => _status = 'Verifying...');
-
-      final result = _verifier.verifyFace(face);
-
-      // ✅ Unknown alert (non-blocking)
-      if (!result.verified) {
-        final lensName =
-            _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
-
-        _alertService.createUnknownAlert(
-          threshold: FaceVerificationService.threshold,
-          lens: lensName,
-          note: 'Unknown face detected',
-        ).catchError((_) {});
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _status = result.message;
-        _lastMatch = result.verified ? (result.person?.name ?? '') : '';
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _status = 'Verification error: $e');
-    } finally {
-      if (!mounted) return;
-      setState(() => _processingFace = false);
-    }
-  }
-
-  Future<void> _toggleCamera() async {
-    try {
-      setState(() => _status = 'Switching camera...');
-
-      await _camera.stopStream();
-      await _camera.switchCamera();
-      await _camera.startStream(_onFrame);
-
-      if (!mounted) return;
-      setState(() => _status = 'Ready');
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _status = 'Camera switch failed: $e');
-    }
+    _controller = SurveillanceController(groupThreshold: 1);
+    _controller.initialize();
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
-    _camera.dispose();
-    _detector.dispose();
-    _verifier.dispose();
-    _multi.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Face Recognition'),
-        actions: [
-          IconButton(
-            onPressed: _toggleCamera,
-            icon: const Icon(Icons.cameraswitch),
-          ),
-          IconButton(
-            onPressed: _processingFace ? null : _verifyOnce,
-            icon: const Icon(Icons.play_arrow),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: Stack(
-              children: [
-                Positioned.fill(child: _camera.buildPreview()),
-                if (_booting)
-                  const Positioned.fill(
-                    child: Center(child: CircularProgressIndicator()),
+    return StreamBuilder<SurveillanceState>(
+      stream: _controller.stateStream,
+      initialData: _controller.currentState,
+      builder: (context, snapshot) {
+        final state = snapshot.data ?? _controller.currentState;
+
+        return Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            title: const Text('VisionBot Surveillance'),
+            backgroundColor: Colors.black87,
+            actions: [
+              // Group threshold indicator
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Center(
+                  child: Text(
+                    'Group: 1+',
+                    style: const TextStyle(fontSize: 12, color: Colors.white70),
                   ),
-              ],
-            ),
+                ),
+              ),
+              // Switch camera
+              IconButton(
+                onPressed: _controller.switchCamera,
+                icon: const Icon(Icons.cameraswitch),
+                tooltip: 'Switch Camera',
+              ),
+              // Manual verify
+              IconButton(
+                onPressed: state.processingFace ? null : _controller.verifyFace,
+                icon: const Icon(Icons.face),
+                tooltip: 'Verify Face Now',
+              ),
+            ],
           ),
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(_status),
-                const SizedBox(height: 6),
-                Text('Last match: $_lastMatch'),
-                const SizedBox(height: 6),
-                Text(_smokeGroupStatus),
-                const SizedBox(height: 12),
-                Row(
+          body: Column(
+            children: [
+              // Camera Preview
+              Expanded(
+                child: Stack(
                   children: [
-                    Switch(
-                      value: _autoVerify,
-                      onChanged: (v) {
-                        setState(() => _autoVerify = v);
-                        _startAutoLoop();
-                      },
+                    Positioned.fill(child: _controller.camera.buildPreview()),
+                    if (state.isBooting)
+                      const Positioned.fill(
+                        child: Center(child: CircularProgressIndicator()),
+                      ),
+                    // Live indicator
+                    Positioned(
+                      top: 16,
+                      right: 16,
+                      child: _LiveIndicator(),
                     ),
-                    const SizedBox(width: 8),
-                    const Text('Auto verify'),
                   ],
                 ),
-                const SizedBox(height: 8),
-                ElevatedButton(
-                  onPressed: _processingFace ? null : _verifyOnce,
-                  child: Text(_processingFace ? 'Processing...' : 'Verify Now'),
+              ),
+
+              // Status Panel
+              _StatusPanel(
+                state: state,
+                autoVerify: _controller.autoVerify,
+                onAutoVerifyChanged: _controller.setAutoVerify,
+                onVerifyPressed: _controller.verifyFace,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ========================
+// UI COMPONENTS
+// ========================
+
+class _LiveIndicator extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: const Text(
+        'LIVE',
+        style: TextStyle(
+          color: Colors.greenAccent,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusPanel extends StatelessWidget {
+  final SurveillanceState state;
+  final bool autoVerify;
+  final ValueChanged<bool> onAutoVerifyChanged;
+  final VoidCallback onVerifyPressed;
+
+  const _StatusPanel({
+    required this.state,
+    required this.autoVerify,
+    required this.onAutoVerifyChanged,
+    required this.onVerifyPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black87,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Face status
+          _StatusRow(
+            icon: Icons.face,
+            label: 'Face:',
+            value: state.faceStatus,
+            color: Colors.blueAccent,
+          ),
+          const SizedBox(height: 8),
+
+          // Last match
+          _StatusRow(
+            icon: Icons.person,
+            label: 'Match:',
+            value: state.lastMatch.isEmpty ? 'None' : state.lastMatch,
+            color: Colors.greenAccent,
+          ),
+          const SizedBox(height: 8),
+
+          // Detection status
+          _StatusRow(
+            icon: Icons.people,
+            label: 'Detection:',
+            value: state.detectionStatus,
+            color: Colors.orangeAccent,
+          ),
+          const SizedBox(height: 16),
+
+          // Auto verify toggle
+          Row(
+            children: [
+              Switch(
+                value: autoVerify,
+                onChanged: onAutoVerifyChanged,
+              ),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Auto verify face (every 3s)',
+                  style: TextStyle(color: Colors.white70),
                 ),
-              ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // Manual verify button
+          ElevatedButton.icon(
+            onPressed: state.processingFace ? null : onVerifyPressed,
+            icon: const Icon(Icons.face),
+            label: Text(state.processingFace ? 'Processing...' : 'Verify Face Now'),
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _StatusRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+
+  const _StatusRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white70,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(color: color),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 }

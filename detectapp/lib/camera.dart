@@ -1,4 +1,5 @@
-// camera
+
+
 import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -35,7 +36,7 @@ class CameraService {
 
     _controller = CameraController(
       cam,
-      ResolutionPreset.medium,
+      ResolutionPreset.medium, // Medium is fine with isolate
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
@@ -66,19 +67,15 @@ class CameraService {
     return c.takePicture();
   }
 
-  /// ✅ REAL-TIME STREAM
-  Future<void> startStream(
-    Future<void> Function(CameraImage image) onFrame,
-  ) async {
+  /// Start image stream (synchronous callback)
+  Future<void> startStream(void Function(CameraImage image) onFrame) async {
     final c = _controller;
     if (c == null || !c.value.isInitialized) {
       throw Exception('Camera not initialized');
     }
     if (c.value.isStreamingImages) return;
 
-    await c.startImageStream((image) async {
-      await onFrame(image);
-    });
+    await c.startImageStream(onFrame);
   }
 
   Future<void> stopStream() async {
