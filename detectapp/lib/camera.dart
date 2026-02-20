@@ -1,4 +1,4 @@
- 
+// camera.dart
 
 import 'dart:async';
 import 'package:camera/camera.dart';
@@ -31,17 +31,39 @@ class CameraService {
     return null;
   }
 
+  // ✅ SOLUTION 2A + 4: Optimized camera settings for low light and motion
   Future<void> _start(CameraDescription cam) async {
     await _controller?.dispose();
 
     _controller = CameraController(
       cam,
-      ResolutionPreset.medium, 
+      ResolutionPreset.high, // ✅ CHANGED from medium - better face detection
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
 
     await _controller!.initialize();
+    
+    // ✅ SOLUTION 2A: Optimize for low light conditions
+    // ✅ SOLUTION 4: Reduce motion blur for moving robot
+    try {
+      // Auto exposure and focus
+      await _controller!.setExposureMode(ExposureMode.auto);
+      await _controller!.setFocusMode(FocusMode.auto);
+      
+      // ✅ For LOW LIGHT: Increase exposure compensation slightly
+      // This helps in dim environments (indoor robot operation)
+      final maxExposure = await _controller!.getMaxExposureOffset();
+      if (maxExposure > 0) {
+        await _controller!.setExposureOffset(maxExposure * 0.3); // 30% boost
+        debugPrint('📸 Camera: Exposure boosted for low light (+${(maxExposure * 0.3).toStringAsFixed(2)})');
+      }
+      
+      debugPrint('✅ Camera optimized: ResolutionPreset.high, Auto-exposure ON');
+    } catch (e) {
+      debugPrint('⚠️ Camera settings configuration failed: $e');
+      // Continue anyway - camera will use defaults
+    }
   }
 
   Future<void> switchCamera() async {
@@ -67,7 +89,7 @@ class CameraService {
     return c.takePicture();
   }
 
-  //image stream 
+  // Image stream for YOLO detection
   Future<void> startStream(void Function(CameraImage image) onFrame) async {
     final c = _controller;
     if (c == null || !c.value.isInitialized) {

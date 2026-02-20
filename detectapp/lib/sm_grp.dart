@@ -40,7 +40,7 @@ class MultiDetectorService {
   );
 
   MultiDetectorService({
-    this.groupThreshold =  3, 
+    this.groupThreshold =  1, 
   });
 
   bool get isInitialized => _isInitialized;
