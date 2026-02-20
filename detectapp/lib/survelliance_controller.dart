@@ -2,8 +2,12 @@
 // Business logic coordinator for surveillance system
 
 import 'dart:async';
+import 'dart:collection'; // ✅ NEW import
+import 'dart:io'; // ✅ NEW import
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart'; // ✅ NEW import
+import 'package:image/image.dart' as img; // ✅ NEW import
 
 import 'camera.dart';
 import 'face_detector.dart';
@@ -72,6 +76,7 @@ class SurveillanceController {
   bool _autoVerify = true;
   Timer? _verifyTimer;
   Timer? _statusTimer;
+  Timer? _cacheCleanupTimer; // ✅ NEW
 
   // Alert state tracking
   bool _lastGroupState = false;
@@ -79,6 +84,15 @@ class SurveillanceController {
 
   int _frameCount = 0;
   static const int _frameSkip = 5;
+
+  // ✅ SOLUTION 1: Frame buffering for non-blocking face verification
+  final Queue<CameraImage> _frameBuffer = Queue();
+  bool _processingBuffer = false;
+  static const int _maxBufferSize = 2; // Keep max 2 frames
+
+  // ✅ SOLUTION 3: Face tracking cache to avoid re-verification
+  final Map<String, DateTime> _recentlyVerified = {};
+  final Duration _verificationCacheDuration = Duration(seconds: 30);
 
   Stream<SurveillanceState> get stateStream => _stateController.stream;
   SurveillanceState get currentState => _state;
@@ -107,6 +121,7 @@ class SurveillanceController {
       await _camera.startStream(_onFrame);
 
       _startStatusPolling();
+      _startCacheCleanup(); // ✅ NEW
 
       _updateState(_state.copyWith(
         isBooting: false,
@@ -115,13 +130,13 @@ class SurveillanceController {
 
       _startAutoVerify();
 
-      debugPrint(' SurveillanceController initialized');
+      debugPrint('✅ SurveillanceController initialized');
     } catch (e) {
       _updateState(_state.copyWith(
         isBooting: false,
         faceStatus: 'Initialization failed: $e',
       ));
-      debugPrint(' SurveillanceController init failed: $e');
+      debugPrint('❌ SurveillanceController init failed: $e');
     }
   }
 
@@ -148,6 +163,26 @@ class SurveillanceController {
 
       _handleDetectionAlerts(det, totalPeople, isGroup);
     });
+  }
+
+  // ✅ SOLUTION 3: Clean up old cache entries every minute
+  void _startCacheCleanup() {
+    _cacheCleanupTimer?.cancel();
+    _cacheCleanupTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      _cleanVerificationCache();
+    });
+  }
+
+  void _cleanVerificationCache() {
+    final now = DateTime.now();
+    final before = _recentlyVerified.length;
+    _recentlyVerified.removeWhere((name, time) => 
+      now.difference(time) > _verificationCacheDuration
+    );
+    final after = _recentlyVerified.length;
+    if (before != after) {
+      debugPrint('🧹 Cache cleanup: removed ${before - after} entries');
+    }
   }
 
   void _handleDetectionAlerts(
@@ -180,22 +215,202 @@ class SurveillanceController {
     _lastSmokeState = det.smokingDetected;
   }
 
+  // ✅ SOLUTION 1: Modified _onFrame - adds buffering for face verification
   void _onFrame(CameraImage image) {
     if (!_multi.isInitialized) return;
 
     _frameCount++;
-    if (_frameCount % _frameSkip != 0) return;
+    
+    // YOLO detection (every 5 frames) - UNCHANGED
+    if (_frameCount % _frameSkip == 0) {
+      _multi.detectAllAsync(image);
+    }
+    
+    // ✅ NEW: Buffer frames for face verification WITHOUT stopping stream
+    // Every 90 frames (~3 seconds at 30fps)
+    if (_frameCount % 90 == 0 && _autoVerify && !_processingBuffer) {
+      // Add frame to buffer (limit buffer size)
+      if (_frameBuffer.length < _maxBufferSize) {
+        _frameBuffer.add(image);
+        _processBufferedFrame();
+      } else {
+        debugPrint('⚠️ Frame buffer full, skipping verification');
+      }
+    }
+  }
 
-    _multi.detectAllAsync(image);
+  // ✅ SOLUTION 1: Process buffered frames asynchronously
+  Future<void> _processBufferedFrame() async {
+    if (_frameBuffer.isEmpty || _processingBuffer) return;
+    
+    _processingBuffer = true;
+    final image = _frameBuffer.removeFirst();
+    
+    _updateState(_state.copyWith(
+      processingFace: true,
+      faceStatus: 'Verifying (buffered)...',
+    ));
+    
+    try {
+      // Convert CameraImage to temporary file
+      final tempPath = await _saveCameraImageToFile(image);
+      
+      // Detect all faces
+      final faces = await _detector.detectAndCropAllFaces(tempPath);
+      
+      debugPrint('📸 Buffered frame: Detected ${faces.length} face(s)');
+      
+      // Verify all faces
+      final results = _verifier.verifyMultipleFaces(faces);
+      
+      // Process results with tracking
+      _processVerificationResults(results);
+      
+      // Clean up temp file
+      try {
+        await File(tempPath).delete();
+      } catch (_) {}
+      
+    } catch (e) {
+      if (e.toString().contains('No face')) {
+        _updateState(_state.copyWith(faceStatus: 'No faces in frame'));
+      } else {
+        debugPrint('⚠️ Buffer processing failed: $e');
+        _updateState(_state.copyWith(faceStatus: 'Verification error'));
+      }
+    } finally {
+      _processingBuffer = false;
+      _updateState(_state.copyWith(processingFace: false));
+    }
+  }
+
+  // ✅ SOLUTION 1: Convert CameraImage to JPEG file
+  Future<String> _saveCameraImageToFile(CameraImage image) async {
+    // Convert YUV420 to RGB Image
+    final img.Image? convertedImage = _convertYUV420ToImage(image);
+    if (convertedImage == null) throw Exception('Image conversion failed');
+    
+    // Save to temporary file
+    final tempDir = await getTemporaryDirectory();
+    final filePath = '${tempDir.path}/face_verify_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    
+    final file = File(filePath);
+    await file.writeAsBytes(img.encodeJpg(convertedImage, quality: 85));
+    
+    return filePath;
+  }
+
+  // ✅ SOLUTION 1: YUV420 to RGB conversion
+  // NOTE: Preprocessing for FaceNet model happens in face_verification.dart (_preprocess)
+  // This conversion is ONLY to create a file for ML Kit face detection
+  img.Image? _convertYUV420ToImage(CameraImage image) {
+    final width = image.width;
+    final height = image.height;
+    
+    final imgImage = img.Image(width: width, height: height);
+    
+    final yPlane = image.planes[0];
+    final uPlane = image.planes[1];
+    final vPlane = image.planes[2];
+    
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final yIndex = y * yPlane.bytesPerRow + x;
+        final uvIndex = (y ~/ 2) * uPlane.bytesPerRow + (x ~/ 2) * (uPlane.bytesPerPixel ?? 1);
+        
+        final Y = yPlane.bytes[yIndex];
+        final U = uPlane.bytes[uvIndex];
+        final V = vPlane.bytes[uvIndex];
+        
+        // YUV to RGB conversion (standard formula)
+        int r = (Y + 1.402 * (V - 128)).round().clamp(0, 255);
+        int g = (Y - 0.344136 * (U - 128) - 0.714136 * (V - 128)).round().clamp(0, 255);
+        int b = (Y + 1.772 * (U - 128)).round().clamp(0, 255);
+        
+        imgImage.setPixelRgba(x, y, r, g, b, 255);
+      }
+    }
+    
+    return imgImage;
+  }
+
+  // ✅ SOLUTION 3: Process verification results with tracking cache
+  void _processVerificationResults(List<VerificationResult> results) {
+    int knownCount = 0;
+    int unknownCount = 0;
+    final knownNames = <String>[];
+    final newKnownNames = <String>[]; // Names not recently verified
+
+    for (final result in results) {
+      if (result.verified && result.person != null) {
+        final name = result.person!.name;
+        
+        // ✅ SOLUTION 3: Check if recently verified (within 30 seconds)
+        final lastVerified = _recentlyVerified[name];
+        final isRecent = lastVerified != null && 
+            DateTime.now().difference(lastVerified) < _verificationCacheDuration;
+        
+        if (isRecent) {
+          debugPrint('⏭️ Skipping alert for $name (verified ${DateTime.now().difference(lastVerified!).inSeconds}s ago)');
+        } else {
+          newKnownNames.add(name);
+          debugPrint('✅ NEW verification: $name');
+        }
+        
+        // ✅ SOLUTION 3: Update cache
+        _recentlyVerified[name] = DateTime.now();
+        
+        knownCount++;
+        if (!knownNames.contains(name)) {
+          knownNames.add(name);
+        }
+      } else {
+        unknownCount++;
+      }
+    }
+
+    debugPrint('📊 Verification results: $knownCount known (${newKnownNames.length} new), $unknownCount unknown');
+
+    // Create alert ONLY for unknown faces (known faces already tracked)
+    if (unknownCount > 0) {
+      final lensName = _camera.lensDirection == CameraLensDirection.front
+          ? 'front'
+          : 'back';
+
+      _alertService.createUnknownAlert(
+        threshold: FaceVerificationService.threshold,
+        lens: lensName,
+        note: '$unknownCount unknown face(s) detected${knownCount > 0 ? ', $knownCount known' : ''}',
+      );
+    }
+
+    // Update UI with results
+    String statusMsg;
+    if (knownCount > 0 && unknownCount > 0) {
+      statusMsg = '✅ ${knownNames.join(", ")} | ⚠️ $unknownCount unknown';
+    } else if (knownCount > 0) {
+      statusMsg = '✅ Verified: ${knownNames.join(", ")}';
+    } else {
+      statusMsg = '⚠️ All unknown ($unknownCount face(s))';
+    }
+
+    _updateState(_state.copyWith(
+      faceStatus: statusMsg,
+      lastMatch: knownNames.isNotEmpty ? knownNames.join(', ') : 'Unknown',
+    ));
   }
 
   void _startAutoVerify() {
     _verifyTimer?.cancel();
     if (!_autoVerify) return;
 
+    // Note: Manual timer is now redundant since _onFrame handles buffering
+    // Kept for compatibility with manual verify button
     _verifyTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      // This is now a fallback - actual verification happens in _onFrame
       if (_state.isBooting || _state.processingFace) return;
-      await verifyFace();
+      // Manual verify still uses old method (stops stream)
+      // await verifyFace();
     });
   }
 
@@ -205,7 +420,8 @@ class SurveillanceController {
     debugPrint('🔄 Auto verify ${enabled ? "enabled" : "disabled"}');
   }
 
-  /// Capture photo and verify ALL detected faces
+  /// Manual face verification (stops stream - used by button press)
+  /// This is the OLD method - kept for manual verification button
   Future<void> verifyFace() async {
     if (_state.processingFace) return;
 
@@ -225,7 +441,7 @@ class SurveillanceController {
       // Detect ALL faces in the image
       final faces = await _detector.detectAndCropAllFaces(shot.path);
       
-      debugPrint('📸 Detected ${faces.length} face(s) in frame');
+      debugPrint('📸 Manual: Detected ${faces.length} face(s) in frame');
 
       _updateState(_state.copyWith(
         faceStatus: 'Verifying ${faces.length} face(s)...',
@@ -234,51 +450,8 @@ class SurveillanceController {
       // Verify all detected faces
       final results = _verifier.verifyMultipleFaces(faces);
 
-      // Process results
-      int knownCount = 0;
-      int unknownCount = 0;
-      final knownNames = <String>[];
-
-      for (final result in results) {
-        if (result.verified && result.person != null) {
-          knownCount++;
-          if (!knownNames.contains(result.person!.name)) {
-            knownNames.add(result.person!.name);
-          }
-        } else {
-          unknownCount++;
-        }
-      }
-
-      debugPrint(' Verification results: $knownCount known, $unknownCount unknown');
-
-      // Create alert if unknown faces detected
-      if (unknownCount > 0) {
-        final lensName = _camera.lensDirection == CameraLensDirection.front
-            ? 'front'
-            : 'back';
-
-        await _alertService.createUnknownAlert(
-          threshold: FaceVerificationService.threshold,
-          lens: lensName,
-          note: '$unknownCount unknown face(s) detected${knownCount > 0 ? ', $knownCount known' : ''}',
-        );
-      }
-
-      // Update UI with results
-      String statusMsg;
-      if (knownCount > 0 && unknownCount > 0) {
-        statusMsg = ' ${knownNames.join(", ")} |  $unknownCount unknown';
-      } else if (knownCount > 0) {
-        statusMsg = ' Verified: ${knownNames.join(", ")}';
-      } else {
-        statusMsg = ' All unknown ($unknownCount face(s))';
-      }
-
-      _updateState(_state.copyWith(
-        faceStatus: statusMsg,
-        lastMatch: knownNames.isNotEmpty ? knownNames.join(', ') : 'Unknown',
-      ));
+      // Process results with tracking
+      _processVerificationResults(results);
 
     } catch (e) {
       final errorMsg = e.toString().contains('No face')
@@ -286,13 +459,13 @@ class SurveillanceController {
           : 'Error: $e';
       
       _updateState(_state.copyWith(faceStatus: errorMsg));
-      debugPrint(' Face verification failed: $e');
+      debugPrint('⚠️ Manual verification failed: $e');
     } finally {
       // Restart stream
       try {
         await _camera.startStream(_onFrame);
       } catch (e) {
-        debugPrint(' Failed to restart stream: $e');
+        debugPrint('⚠️ Failed to restart stream: $e');
       }
 
       _updateState(_state.copyWith(processingFace: false));
@@ -310,24 +483,26 @@ class SurveillanceController {
       await _camera.switchCamera();
       await _camera.startStream(_onFrame);
 
-      // Reset cooldowns
+      // Reset cooldowns and cache
       _alertService.resetCooldowns();
       _lastGroupState = false;
       _lastSmokeState = false;
+      _recentlyVerified.clear(); // ✅ NEW: Clear face tracking cache
+      _frameBuffer.clear(); // ✅ NEW: Clear frame buffer
 
       _updateState(_state.copyWith(faceStatus: 'Ready'));
       _startAutoVerify();
 
-      debugPrint(' Camera switched');
+      debugPrint('📷 Camera switched, cache cleared');
     } catch (e) {
       _updateState(_state.copyWith(faceStatus: 'Switch failed: $e'));
-      debugPrint('Camera switch failed: $e');
+      debugPrint('❌ Camera switch failed: $e');
     }
   }
 
   void setGroupThreshold(int threshold) {
     _multi.setGroupThreshold(threshold);
-    debugPrint(' Group threshold set to $threshold');
+    debugPrint('👥 Group threshold set to $threshold');
   }
 
   void _updateState(SurveillanceState newState) {
@@ -339,11 +514,14 @@ class SurveillanceController {
   Future<void> dispose() async {
     _verifyTimer?.cancel();
     _statusTimer?.cancel();
+    _cacheCleanupTimer?.cancel(); // ✅ NEW
     await _camera.dispose();
     await _detector.dispose();
     _verifier.dispose();
     _multi.dispose();
     await _stateController.close();
-    debugPrint(' SurveillanceController disposed');
+    _frameBuffer.clear(); // ✅ NEW
+    _recentlyVerified.clear(); // ✅ NEW
+    debugPrint('🧹 SurveillanceController disposed');
   }
 }
