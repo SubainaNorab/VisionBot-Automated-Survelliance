@@ -1,3 +1,4 @@
+// face_verification.dart
 
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -25,7 +26,7 @@ class FaceVerificationService {
   static const String _collection = 'enrolled_faces';
   static const String _modelPath = 'assets/facenet.tflite';
 
-  static const double threshold = 0.45; 
+  static const double threshold = 0.45;
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
@@ -37,10 +38,8 @@ class FaceVerificationService {
 
   final List<Person> _people = [];
 
-
-
   Future<void> initialize() async {
-    print(' FaceVerification initialize');
+    print('🔧 FaceVerification initialize');
     await _loadModel();
     await _loadPeople();
   }
@@ -50,7 +49,7 @@ class FaceVerificationService {
     _interpreter = null;
   }
 
-
+  /// Verify a single face image against enrolled faces
   VerificationResult verifyFace(img.Image face) {
     if (_interpreter == null) {
       return _fail('Model not loaded');
@@ -93,6 +92,56 @@ class FaceVerificationService {
     );
   }
 
+  /// Verify multiple face images against enrolled faces
+  /// Returns a list of verification results, one for each face
+  List<VerificationResult> verifyMultipleFaces(List<img.Image> faces) {
+    if (_interpreter == null) {
+      return [_fail('Model not loaded')];
+    }
+
+    if (_people.isEmpty) {
+      return [_fail('No enrolled faces')];
+    }
+
+    final results = <VerificationResult>[];
+
+    for (int i = 0; i < faces.length; i++) {
+      final face = faces[i];
+      final input = _preprocess(face);
+      final candidate = _embedding(input);
+
+      double bestDist = double.infinity;
+      Person? bestPerson;
+
+      for (final p in _people) {
+        final d = _cosineDistance(candidate, p.embedding);
+        if (d < bestDist) {
+          bestDist = d;
+          bestPerson = p;
+        }
+      }
+
+      final matched = bestDist <= threshold;
+      final confidence = (1.0 - (bestDist / threshold)).clamp(0.0, 1.0);
+
+      print(
+        matched
+            ? ' MATCH [${i + 1}/${faces.length}] ${bestPerson!.name} dist=${bestDist.toStringAsFixed(3)}'
+            : ' NO MATCH [${i + 1}/${faces.length}] dist=${bestDist.toStringAsFixed(3)}',
+      );
+
+      results.add(VerificationResult(
+        verified: matched,
+        person: matched ? bestPerson : null,
+        confidence: confidence,
+        message: matched
+            ? 'Verified ${bestPerson!.name}'
+            : 'Unknown (dist=${bestDist.toStringAsFixed(3)})',
+      ));
+    }
+
+    return results;
+  }
 
   Future<void> _loadPeople() async {
     _people.clear();
@@ -107,9 +156,8 @@ class FaceVerificationService {
       _people.add(p);
     }
 
-    print('Loaded ${_people.length} enrolled people');
+    print(' Loaded ${_people.length} enrolled people');
   }
-
 
   Future<void> _loadModel() async {
     final bytes = await rootBundle.load(_modelPath);
@@ -125,9 +173,8 @@ class FaceVerificationService {
     _inputW = inShape[2];
     _embSize = outShape.last;
 
-    print('✅ Model loaded input=$_inputW x $_inputH emb=$_embSize');
+    print(' Model loaded input=$_inputW x $_inputH emb=$_embSize');
   }
-
 
   List<List<List<List<double>>>> _preprocess(img.Image face) {
     final resized = img.copyResize(face, width: _inputW, height: _inputH);
@@ -153,7 +200,6 @@ class FaceVerificationService {
     return input;
   }
 
-
   List<double> _embedding(List<List<List<List<double>>>> input) {
     final out = List.generate(1, (_) => List.filled(_embSize, 0.0));
 
@@ -174,7 +220,6 @@ class FaceVerificationService {
 
     return emb;
   }
-
 
   double _cosineDistance(List<double> a, List<double> b) {
     double dot = 0, na = 0, nb = 0;

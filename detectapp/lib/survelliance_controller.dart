@@ -1,3 +1,4 @@
+// surveillance_controller.dart
 // Business logic coordinator for surveillance system
 
 import 'dart:async';
@@ -54,7 +55,6 @@ class SurveillanceState {
   }
 }
 
-
 class SurveillanceController {
   // Services
   final CameraService _camera = CameraService();
@@ -72,9 +72,6 @@ class SurveillanceController {
   bool _autoVerify = true;
   Timer? _verifyTimer;
   Timer? _statusTimer;
-
-  bool _faceDetectedInVerification = false;
-  DateTime _lastFaceDetectionTime = DateTime.fromMillisecondsSinceEpoch(0);
 
   // Alert state tracking
   bool _lastGroupState = false;
@@ -128,21 +125,14 @@ class SurveillanceController {
     }
   }
 
-  
+  /// Poll detection results and update UI
   void _startStatusPolling() {
     _statusTimer?.cancel();
     _statusTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
       final det = _multi.lastResult;
 
+      // Use YOLO person count directly (no workarounds)
       int totalPeople = det.personCount;
-      final faceExpired =
-          DateTime.now().difference(_lastFaceDetectionTime).inSeconds > 5;
-
-      if (_faceDetectedInVerification && !faceExpired && det.personCount == 0) {
-        totalPeople = 1; 
-      } else if (faceExpired) {
-        _faceDetectedInVerification = false; 
-      }
 
       bool isGroup = totalPeople >= _multi.groupThreshold;
 
@@ -168,22 +158,24 @@ class SurveillanceController {
     final lensName =
         _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
+    // Group alert
     if (isGroup && !_lastGroupState) {
-      debugPrint('GROUP DETECTED: $totalPeople people');
+      debugPrint('🚨 GROUP DETECTED: $totalPeople people');
       _alertService
           .createGroupAlert(
             personCount: totalPeople,
             lens: lensName,
           )
-          .catchError((e) => debugPrint('Group alert error: $e'));
+          .catchError((e) => debugPrint('❌ Group alert error: $e'));
     }
     _lastGroupState = isGroup;
 
+    // Smoking alert
     if (det.smokingDetected && !_lastSmokeState) {
-      debugPrint('SMOKING DETECTED');
+      debugPrint('🚨 SMOKING DETECTED');
       _alertService
           .createSmokingAlert(lens: lensName)
-          .catchError((e) => debugPrint('Smoke alert error: $e'));
+          .catchError((e) => debugPrint('❌ Smoke alert error: $e'));
     }
     _lastSmokeState = det.smokingDetected;
   }
@@ -210,69 +202,104 @@ class SurveillanceController {
   void setAutoVerify(bool enabled) {
     _autoVerify = enabled;
     _startAutoVerify();
-    debugPrint('Auto verify ${enabled ? "enabled" : "disabled"}');
+    debugPrint('🔄 Auto verify ${enabled ? "enabled" : "disabled"}');
   }
 
- 
+  /// Capture photo and verify ALL detected faces
   Future<void> verifyFace() async {
     if (_state.processingFace) return;
 
     _updateState(_state.copyWith(
       processingFace: true,
-      faceStatus: 'Capturing face...',
+      faceStatus: 'Capturing...',
     ));
 
     try {
-      
+      // Stop stream to capture photo
       await _camera.stopStream();
 
       final shot = await _camera.takePicture();
 
-      _updateState(_state.copyWith(faceStatus: 'Detecting face...'));
-      final face = await _detector.detectAndCropFaceFromFile(shot.path);
-
-     
-      _faceDetectedInVerification = true;
-      _lastFaceDetectionTime = DateTime.now();
-      debugPrint('Face detected via verification at $_lastFaceDetectionTime');
-
-      _updateState(_state.copyWith(faceStatus: 'Verifying...'));
-      final result = _verifier.verifyFace(face);
-
+      _updateState(_state.copyWith(faceStatus: 'Detecting faces...'));
       
-      if (!result.verified) {
+      // Detect ALL faces in the image
+      final faces = await _detector.detectAndCropAllFaces(shot.path);
+      
+      debugPrint('📸 Detected ${faces.length} face(s) in frame');
+
+      _updateState(_state.copyWith(
+        faceStatus: 'Verifying ${faces.length} face(s)...',
+      ));
+      
+      // Verify all detected faces
+      final results = _verifier.verifyMultipleFaces(faces);
+
+      // Process results
+      int knownCount = 0;
+      int unknownCount = 0;
+      final knownNames = <String>[];
+
+      for (final result in results) {
+        if (result.verified && result.person != null) {
+          knownCount++;
+          if (!knownNames.contains(result.person!.name)) {
+            knownNames.add(result.person!.name);
+          }
+        } else {
+          unknownCount++;
+        }
+      }
+
+      debugPrint(' Verification results: $knownCount known, $unknownCount unknown');
+
+      // Create alert if unknown faces detected
+      if (unknownCount > 0) {
         final lensName = _camera.lensDirection == CameraLensDirection.front
             ? 'front'
             : 'back';
 
-        _alertService
-            .createUnknownAlert(
-              threshold: FaceVerificationService.threshold,
-              lens: lensName,
-              note: 'Unknown face detected',
-            )
-            .catchError((_) {});
+        await _alertService.createUnknownAlert(
+          threshold: FaceVerificationService.threshold,
+          lens: lensName,
+          note: '$unknownCount unknown face(s) detected${knownCount > 0 ? ', $knownCount known' : ''}',
+        );
+      }
+
+      // Update UI with results
+      String statusMsg;
+      if (knownCount > 0 && unknownCount > 0) {
+        statusMsg = ' ${knownNames.join(", ")} |  $unknownCount unknown';
+      } else if (knownCount > 0) {
+        statusMsg = ' Verified: ${knownNames.join(", ")}';
+      } else {
+        statusMsg = ' All unknown ($unknownCount face(s))';
       }
 
       _updateState(_state.copyWith(
-        faceStatus: result.message,
-        lastMatch: result.verified ? (result.person?.name ?? '') : '',
+        faceStatus: statusMsg,
+        lastMatch: knownNames.isNotEmpty ? knownNames.join(', ') : 'Unknown',
       ));
+
     } catch (e) {
-      _faceDetectedInVerification = false;
-      _updateState(_state.copyWith(faceStatus: 'No face detected'));
-      debugPrint('⚠️ Face detection failed: $e');
-    } finally {
+      final errorMsg = e.toString().contains('No face')
+          ? 'No faces detected'
+          : 'Error: $e';
       
+      _updateState(_state.copyWith(faceStatus: errorMsg));
+      debugPrint(' Face verification failed: $e');
+    } finally {
+      // Restart stream
       try {
         await _camera.startStream(_onFrame);
-      } catch (_) {}
+      } catch (e) {
+        debugPrint(' Failed to restart stream: $e');
+      }
 
       _updateState(_state.copyWith(processingFace: false));
     }
   }
 
- 
+  /// Switch between front and back camera
   Future<void> switchCamera() async {
     try {
       _updateState(_state.copyWith(faceStatus: 'Switching camera...'));
@@ -283,11 +310,10 @@ class SurveillanceController {
       await _camera.switchCamera();
       await _camera.startStream(_onFrame);
 
-      
+      // Reset cooldowns
       _alertService.resetCooldowns();
       _lastGroupState = false;
       _lastSmokeState = false;
-      _faceDetectedInVerification = false;
 
       _updateState(_state.copyWith(faceStatus: 'Ready'));
       _startAutoVerify();
@@ -295,7 +321,7 @@ class SurveillanceController {
       debugPrint(' Camera switched');
     } catch (e) {
       _updateState(_state.copyWith(faceStatus: 'Switch failed: $e'));
-      debugPrint(' Camera switch failed: $e');
+      debugPrint('Camera switch failed: $e');
     }
   }
 
@@ -309,7 +335,7 @@ class SurveillanceController {
     _stateController.add(_state);
   }
 
-  
+  /// Clean up all resources
   Future<void> dispose() async {
     _verifyTimer?.cancel();
     _statusTimer?.cancel();
