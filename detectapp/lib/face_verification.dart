@@ -1,4 +1,3 @@
-// right verify
 
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -26,7 +25,7 @@ class FaceVerificationService {
   static const String _collection = 'enrolled_faces';
   static const String _modelPath = 'assets/facenet.tflite';
 
-  static const double threshold = 0.45; // correct FaceNet cosine distance
+  static const double threshold = 0.45; 
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
@@ -41,7 +40,7 @@ class FaceVerificationService {
 
 
   Future<void> initialize() async {
-    print('🚀 FaceVerification initialize');
+    print(' FaceVerification initialize');
     await _loadModel();
     await _loadPeople();
   }
@@ -80,8 +79,8 @@ class FaceVerificationService {
 
     print(
       matched
-          ? '✅ MATCH ${bestPerson!.name} dist=${bestDist.toStringAsFixed(3)}'
-          : '❌ NO MATCH dist=${bestDist.toStringAsFixed(3)}',
+          ? ' MATCH ${bestPerson!.name} dist=${bestDist.toStringAsFixed(3)}'
+          : ' NO MATCH dist=${bestDist.toStringAsFixed(3)}',
     );
 
     return VerificationResult(
@@ -108,7 +107,7 @@ class FaceVerificationService {
       _people.add(p);
     }
 
-    print('📦 Loaded ${_people.length} enrolled people');
+    print('Loaded ${_people.length} enrolled people');
   }
 
 
@@ -154,7 +153,6 @@ class FaceVerificationService {
     return input;
   }
 
-  // ================= EMBEDDING =================
 
   List<double> _embedding(List<List<List<List<double>>>> input) {
     final out = List.generate(1, (_) => List.filled(_embSize, 0.0));

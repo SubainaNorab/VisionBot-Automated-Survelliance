@@ -1,4 +1,3 @@
-// lib/surveillance_controller.dart
 // Business logic coordinator for surveillance system
 
 import 'dart:async';
@@ -55,7 +54,7 @@ class SurveillanceState {
   }
 }
 
-/// Main controller for surveillance operations
+
 class SurveillanceController {
   // Services
   final CameraService _camera = CameraService();
@@ -119,17 +118,17 @@ class SurveillanceController {
 
       _startAutoVerify();
 
-      debugPrint('✅ SurveillanceController initialized');
+      debugPrint(' SurveillanceController initialized');
     } catch (e) {
       _updateState(_state.copyWith(
         isBooting: false,
         faceStatus: 'Initialization failed: $e',
       ));
-      debugPrint('❌ SurveillanceController init failed: $e');
+      debugPrint(' SurveillanceController init failed: $e');
     }
   }
 
-  /// Start polling detection results
+  
   void _startStatusPolling() {
     _statusTimer?.cancel();
     _statusTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
@@ -140,9 +139,9 @@ class SurveillanceController {
           DateTime.now().difference(_lastFaceDetectionTime).inSeconds > 5;
 
       if (_faceDetectedInVerification && !faceExpired && det.personCount == 0) {
-        totalPeople = 1; // Use face detection if YOLO sees nothing
+        totalPeople = 1; 
       } else if (faceExpired) {
-        _faceDetectedInVerification = false; // Reset after 5 seconds
+        _faceDetectedInVerification = false; 
       }
 
       bool isGroup = totalPeople >= _multi.groupThreshold;
@@ -170,7 +169,7 @@ class SurveillanceController {
         _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
     if (isGroup && !_lastGroupState) {
-      debugPrint('🚨 GROUP DETECTED: $totalPeople people');
+      debugPrint('GROUP DETECTED: $totalPeople people');
       _alertService
           .createGroupAlert(
             personCount: totalPeople,
@@ -181,7 +180,7 @@ class SurveillanceController {
     _lastGroupState = isGroup;
 
     if (det.smokingDetected && !_lastSmokeState) {
-      debugPrint('🚨 SMOKING DETECTED');
+      debugPrint('SMOKING DETECTED');
       _alertService
           .createSmokingAlert(lens: lensName)
           .catchError((e) => debugPrint('Smoke alert error: $e'));
@@ -224,7 +223,7 @@ class SurveillanceController {
     ));
 
     try {
-      // Stop stream to avoid conflicts
+      
       await _camera.stopStream();
 
       final shot = await _camera.takePicture();
@@ -235,12 +234,12 @@ class SurveillanceController {
      
       _faceDetectedInVerification = true;
       _lastFaceDetectionTime = DateTime.now();
-      debugPrint('✅ Face detected via verification at $_lastFaceDetectionTime');
+      debugPrint('Face detected via verification at $_lastFaceDetectionTime');
 
       _updateState(_state.copyWith(faceStatus: 'Verifying...'));
       final result = _verifier.verifyFace(face);
 
-      // Create alert for unknown faces
+      
       if (!result.verified) {
         final lensName = _camera.lensDirection == CameraLensDirection.front
             ? 'front'
@@ -264,7 +263,7 @@ class SurveillanceController {
       _updateState(_state.copyWith(faceStatus: 'No face detected'));
       debugPrint('⚠️ Face detection failed: $e');
     } finally {
-      // Resume stream
+      
       try {
         await _camera.startStream(_onFrame);
       } catch (_) {}
@@ -284,7 +283,7 @@ class SurveillanceController {
       await _camera.switchCamera();
       await _camera.startStream(_onFrame);
 
-      // Reset alert states
+      
       _alertService.resetCooldowns();
       _lastGroupState = false;
       _lastSmokeState = false;
@@ -293,16 +292,16 @@ class SurveillanceController {
       _updateState(_state.copyWith(faceStatus: 'Ready'));
       _startAutoVerify();
 
-      debugPrint('✅ Camera switched');
+      debugPrint(' Camera switched');
     } catch (e) {
       _updateState(_state.copyWith(faceStatus: 'Switch failed: $e'));
-      debugPrint('❌ Camera switch failed: $e');
+      debugPrint(' Camera switch failed: $e');
     }
   }
 
   void setGroupThreshold(int threshold) {
     _multi.setGroupThreshold(threshold);
-    debugPrint('✅ Group threshold set to $threshold');
+    debugPrint(' Group threshold set to $threshold');
   }
 
   void _updateState(SurveillanceState newState) {
@@ -319,6 +318,6 @@ class SurveillanceController {
     _verifier.dispose();
     _multi.dispose();
     await _stateController.close();
-    debugPrint('✅ SurveillanceController disposed');
+    debugPrint(' SurveillanceController disposed');
   }
 }

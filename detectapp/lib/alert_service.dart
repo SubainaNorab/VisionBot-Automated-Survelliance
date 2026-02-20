@@ -41,7 +41,7 @@ class AlertService {
     });
   }
 
-/// Create group detection alert
+// group detection alert
   Future<void> createGroupAlert({
     required int personCount,
     required String lens,
@@ -70,7 +70,7 @@ class AlertService {
     }
   }
 
-  /// Create smoking detection alert
+  // smoking detection alert
   Future<void> createSmokingAlert({
     required String lens,
   }) async {
@@ -91,13 +91,13 @@ class AlertService {
         'lens': lens,
         'note': 'Smoking detected',
       });
-      debugPrint('✅ Smoking alert saved');
+      debugPrint(' Smoking alert saved');
     } catch (e) {
-      debugPrint('❌ Failed to save smoking alert: $e');
+      debugPrint(' Failed to save smoking alert: $e');
     }
   }
 
-  /// Reset cooldowns 
+  // Reset cooldowns
   void resetCooldowns() {
     _lastAlertAt = null;
     _lastGroupAt = null;

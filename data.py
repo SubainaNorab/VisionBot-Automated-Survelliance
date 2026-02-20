@@ -1,7 +1,4 @@
-#!/usr/bin/env python3
-"""
-FaceNet Enrollment Script with Firebase Storage - FIXED
-"""
+
 
 import tensorflow as tf
 import numpy as np
@@ -16,33 +13,27 @@ print("="*70)
 print("FACENET ENROLLMENT TO FIREBASE")
 print("="*70)
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
 
-TFLITE_MODEL = 'facenet.tflite'  # NO SPACE
+
+TFLITE_MODEL = 'facenet.tflite'  
 FIREBASE_CONFIG = 'firebase-credentials.json'
 ENROLLED_IMAGES_DIR = 'enrolled_faces'
 
-# People to enroll
+
 PEOPLE_TO_ENROLL = {
-    'Subaina': 'subaina.jpg',
-    'Person1': 'test.jpg',
+    'Shaham': 'Shaham.jpeg',
+  
     
 }
 
-# Create directory
+
 if not os.path.exists(ENROLLED_IMAGES_DIR):
     os.makedirs(ENROLLED_IMAGES_DIR)
 
-# ============================================================================
-# INITIALIZE FIREBASE
-# ============================================================================
-
-print(f"\n🔥 Initializing Firebase...")
+print(f"\n Initializing Firebase...")
 
 if not os.path.exists(FIREBASE_CONFIG):
-    print(f"❌ Firebase config not found:  {FIREBASE_CONFIG}")
+    print(f" Firebase config not found:  {FIREBASE_CONFIG}")
     exit(1)
 
 try:
@@ -59,21 +50,18 @@ try:
     db = firestore.client()
     bucket = storage.bucket()
     
-    print(f"✅ Firebase initialized!")
+    print(f"Firebase initialized!")
     print(f"   Project:  {project_id}")
     
 except Exception as e:
-    print(f"❌ Firebase initialization failed: {e}")
+    print(f" Firebase initialization failed: {e}")
     exit(1)
 
-# ============================================================================
-# LOAD MODEL
-# ============================================================================
 
-print(f"\n📦 Loading FaceNet model...")
+print(f"\n Loading FaceNet model...")
 
 if not os.path.exists(TFLITE_MODEL):
-    print(f"❌ Model not found: {TFLITE_MODEL}")
+    print(f" Model not found: {TFLITE_MODEL}")
     exit(1)
 
 interpreter = tf.lite.Interpreter(model_path=TFLITE_MODEL)
@@ -86,17 +74,15 @@ input_shape = input_details[0]['shape']
 batch_size, height, width, channels = input_shape
 embedding_size = output_details[0]['shape'][-1]
 
-print(f"✅ Model loaded!")
+print(f" Model loaded!")
 print(f"   Input:  {height}x{width}x{channels}")
 print(f"   Output: {embedding_size}-dim embeddings")
 
-# Load face detector
+#  face detector
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-print(f"✅ Face detector loaded!")
+print(f" Face detector loaded!")
 
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
+
 
 def detect_face(image):
     """Detect the largest face in image"""
@@ -154,13 +140,10 @@ def upload_image_to_firebase(local_path, firebase_path):
         blob.make_public()
         return blob.public_url
     except Exception as e:
-        print(f"   ⚠️ Upload failed: {e}")
+        print(f"   Upload failed: {e}")
         return None
 
 
-# ============================================================================
-# ENROLLMENT
-# ============================================================================
 
 print(f"\n{'='*70}")
 print(f"ENROLLING {len(PEOPLE_TO_ENROLL)} PEOPLE")
@@ -171,63 +154,63 @@ failed_count = 0
 
 for person_name, image_file in PEOPLE_TO_ENROLL.items():
     print(f"\n{'─'*70}")
-    print(f"📋 Enrolling: {person_name}")
+    print(f" Enrolling: {person_name}")
     print(f"   Image: {image_file}")
     print(f"{'─'*70}")
     
     if not os.path.exists(image_file):
-        print(f"❌ Image not found:  {image_file}")
+        print(f" Image not found:  {image_file}")
         failed_count += 1
         continue
     
-    print(f"\n📷 Loading image...")
+    print(f"\nLoading image...")
     image = cv2.imread(image_file)
     
     if image is None:
-        print(f"❌ Failed to load:  {image_file}")
+        print(f" Failed to load:  {image_file}")
         failed_count += 1
         continue
     
-    print(f"✅ Loaded: {image. shape}")
+    print(f"Loaded: {image. shape}")
     
-    print(f"\n🔍 Detecting face...")
+    print(f"\n Detecting face...")
     face_box = detect_face(image)
     
     if face_box is None:
-        print(f"❌ No face detected!")
+        print(f" No face detected!")
         failed_count += 1
         continue
     
     x, y, w, h = face_box
-    print(f"✅ Face found: ({x},{y}) size: {w}x{h}")
+    print(f"Face found: ({x},{y}) size: {w}x{h}")
     
-    print(f"\n🔄 Preprocessing...")
+    print(f"\n Preprocessing...")
     face_input, face_display = extract_and_preprocess_face(image, face_box)
-    print(f"✅ Preprocessed to {width}x{height}")
+    print(f" Preprocessed to {width}x{height}")
     
-    print(f"\n⚡ Generating embedding...")
+    print(f"\n Generating embedding...")
     embedding = get_embedding(face_input)
     
     embedding_array = np.array(embedding)
     non_zero = np.count_nonzero(np.abs(embedding_array) > 0.001)
     norm = np.linalg.norm(embedding_array)
     
-    print(f"✅ Embedding generated!")
+    print(f" Embedding generated!")
     print(f"   Dimensions: {len(embedding)}")
     print(f"   Non-zero: {non_zero}/{len(embedding)} ({100*non_zero/len(embedding):.1f}%)")
     print(f"   L2 norm: {norm:.6f}")
     
     if non_zero < 10:
-        print(f"❌ Embedding quality too low!")
+        print(f" Embedding quality too low!")
         failed_count += 1
         continue
     
-    # FIXED: No spaces in filename
+    
     safe_name = person_name.replace(' ', '_').replace('/', '_').replace('\\', '_')
     face_filename = f"enrolled_{safe_name}.jpg"  # NO SPACE BEFORE . jpg
     face_path = os.path.join(ENROLLED_IMAGES_DIR, face_filename)
     
-    print(f"\n💾 Saving locally...")
+    print(f"\n Saving locally...")
     print(f"   File: {face_filename}")
     
     try:
@@ -240,25 +223,25 @@ for person_name, image_file in PEOPLE_TO_ENROLL.items():
             raise Exception("File not created")
         
         file_size = os.path.getsize(face_path)
-        print(f"✅ Saved: {face_filename} ({file_size} bytes)")
+        print(f" Saved: {face_filename} ({file_size} bytes)")
         
     except Exception as e:
-        print(f"❌ Save failed: {e}")
+        print(f" Save failed: {e}")
         failed_count += 1
         continue
     
-    print(f"\n☁️ Uploading to Firebase Storage...")
+    print(f"\n Uploading to Firebase Storage...")
     firebase_image_path = f"enrolled_faces/{face_filename}"
     image_url = upload_image_to_firebase(face_path, firebase_image_path)
     
     if image_url:
-        print(f"✅ Uploaded:  {image_url}")
+        print(f" Uploaded:  {image_url}")
     else:
-        print(f"⚠️ Upload failed, continuing...")
+        print(f"Upload failed, continuing...")
         image_url = ""
     
-    print(f"\n🔥 Saving to Firestore...")
-    
+    print(f"\n Saving to Firestore...")
+
     try:
         doc_ref = db.collection('enrolled_faces').document(safe_name)
         
@@ -280,40 +263,38 @@ for person_name, image_file in PEOPLE_TO_ENROLL.items():
         print(f"   Document:  {safe_name}")
         
         enrolled_count += 1
-        print(f"\n✅ ✅ ✅ Successfully enrolled:  {person_name}")
+        print(f"\nSuccessfully enrolled:  {person_name}")
         
     except Exception as e:
-        print(f"❌ Firestore save failed: {e}")
+        print(f" Firestore save failed: {e}")
         failed_count += 1
 
-# ============================================================================
-# FINAL SUMMARY
-# ============================================================================
+
 
 print(f"\n{'='*70}")
-print(f"✅ ✅ ✅ ENROLLMENT COMPLETE! ✅ ✅ ✅")
+print(f" ENROLLMENT COMPLETE! ")
 print(f"{'='*70}")
 
-print(f"\n📊 Summary:")
-print(f"   ✅ Successfully enrolled: {enrolled_count}")
-print(f"   ❌ Failed:  {failed_count}")
-print(f"   📝 Total attempted: {len(PEOPLE_TO_ENROLL)}")
+print(f"\n Summary:")
+print(f"   Successfully enrolled: {enrolled_count}")
+print(f"   Failed:  {failed_count}")
+print(f"   Total attempted: {len(PEOPLE_TO_ENROLL)}")
 
 if enrolled_count > 0:
-    print(f"\n🔥 Firebase Firestore:")
+    print(f"\n Firebase Firestore:")
     print(f"   Collection: enrolled_faces")
     
-    print(f"\n👥 Enrolled People:")
+    print(f"\n Enrolled People:")
     try:
         docs = db.collection('enrolled_faces').stream()
         for doc in docs: 
             data = doc.to_dict()
-            print(f"   ✅ {data. get('name', doc.id)}")
+            print(f"   {data.get('name', doc.id)}")
             print(f"      Image: {data.get('image_url', 'N/A')[:50]}...")
     except Exception as e:
-        print(f"   ⚠️ Could not list:  {e}")
+        print(f"   Could not list:  {e}")
     
-    print(f"\n📝 Next:  Update Flutter to read from 'enrolled_faces' collection")
+    print(f"\n Next:  Update Flutter to read from 'enrolled_faces' collection")
 
-print(f"\n✅ Done!")
+print(f"\n Done!")
 print(f"{'='*70}")

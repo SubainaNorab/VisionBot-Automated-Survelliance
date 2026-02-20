@@ -1,5 +1,4 @@
-// lib/isolate_detector.dart
-// Background isolate for YOLO inference (FIXED GROUP THRESHOLD)
+
 
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -8,7 +7,6 @@ import 'package:flutter/foundation.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'dart:math';
 
-/// Message sent TO isolate
 class DetectionRequest {
   final SendPort resultPort;
   final Uint8List yPlane;
@@ -81,9 +79,9 @@ void detectionIsolateEntryPoint(SendPort mainSendPort) async {
     yolo = await Interpreter.fromAsset('assets/yolov8n.tflite', options: opt);
     smoke = await Interpreter.fromAsset('assets/smoking.tflite', options: opt);
     
-    debugPrint('✅ Isolate models loaded');
+    debugPrint(' Isolate models loaded');
   } catch (e) {
-    debugPrint('❌ Isolate model load failed: $e');
+    debugPrint(' Isolate model load failed: $e');
     return;
   }
 

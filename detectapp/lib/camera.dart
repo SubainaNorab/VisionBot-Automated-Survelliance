@@ -1,4 +1,4 @@
-
+ 
 
 import 'dart:async';
 import 'package:camera/camera.dart';
@@ -36,7 +36,7 @@ class CameraService {
 
     _controller = CameraController(
       cam,
-      ResolutionPreset.medium, // Medium is fine with isolate
+      ResolutionPreset.medium, 
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
@@ -67,7 +67,7 @@ class CameraService {
     return c.takePicture();
   }
 
-  /// Start image stream (synchronous callback)
+  //image stream 
   Future<void> startStream(void Function(CameraImage image) onFrame) async {
     final c = _controller;
     if (c == null || !c.value.isInitialized) {

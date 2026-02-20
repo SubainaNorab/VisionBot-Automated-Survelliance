@@ -1,4 +1,4 @@
-// face detector
+
 import 'dart:io';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;

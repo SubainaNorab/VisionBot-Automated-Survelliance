@@ -1,5 +1,3 @@
-// lib/sm_grp.dart 
-
 import 'dart:async';
 import 'dart:isolate';
 import 'package:camera/camera.dart';
@@ -42,24 +40,24 @@ class MultiDetectorService {
   );
 
   MultiDetectorService({
-    this.groupThreshold =  3, // Default: 3 or more people = group
+    this.groupThreshold =  3, 
   });
 
   bool get isInitialized => _isInitialized;
   DetectionResult get lastResult => _last;
 
-  /// Initialize background isolate
+  
   Future<void> initialize() async {
     try {
       _receivePort = ReceivePort();
 
-      // Spawn isolate
+     
       _isolate = await Isolate.spawn(
         detectionIsolateEntryPoint,
         _receivePort!.sendPort,
       );
 
-      // Get isolate's send port
+      
       final completer = Completer<SendPort>();
       _receivePort!.listen((message) {
         if (message is SendPort) {
@@ -78,30 +76,30 @@ class MultiDetectorService {
       _isolateSendPort = await completer.future;
       _isInitialized = true;
 
-      debugPrint('✅ MultiDetectorService isolate ready (group threshold: $groupThreshold)');
+      debugPrint('MultiDetectorService isolate ready (group threshold: $groupThreshold)');
     } catch (e) {
       _isInitialized = false;
-      debugPrint('❌ Isolate initialization failed: $e');
+      debugPrint(' Isolate initialization failed: $e');
     }
   }
 
   /// Update group threshold dynamically
   void setGroupThreshold(int threshold) {
     groupThreshold = threshold;
-    debugPrint('✅ Group threshold updated to: $threshold');
+    debugPrint('Group threshold updated to: $threshold');
   }
 
   /// Send frame to isolate 
   void detectAllAsync(CameraImage image) {
     if (!_isInitialized || _isolateSendPort == null) return;
-    if (_busy) return; // Drop frame if still processing
+    if (_busy) return; 
 
     _busy = true;
 
     try {
       final resultPort = ReceivePort();
 
-      // Send request to isolate with current group threshold
+     
       _isolateSendPort!.send(DetectionRequest(
         resultPort: resultPort.sendPort,
         yPlane: image.planes[0].bytes,
@@ -112,10 +110,10 @@ class MultiDetectorService {
         yRowStride: image.planes[0].bytesPerRow,
         uvRowStride: image.planes[1].bytesPerRow,
         uvPixelStride: image.planes[1].bytesPerPixel ?? 2,
-        groupThreshold: groupThreshold, // ✅ FIXED
+        groupThreshold: groupThreshold, 
       ));
 
-      // Clean up result port after receiving
+      
       resultPort.listen((response) {
         if (response is DetectionResponse) {
           _busy = false;
@@ -130,7 +128,7 @@ class MultiDetectorService {
       });
     } catch (e) {
       _busy = false;
-      debugPrint('⚠️ Detection request failed: $e');
+      debugPrint(" Detection request failed: $e");
     }
   }
 

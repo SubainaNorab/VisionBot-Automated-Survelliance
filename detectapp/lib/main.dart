@@ -1,4 +1,4 @@
-// lib/main.dart (CLEAN - UI only)
+
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -126,9 +126,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> {
   }
 }
 
-// ========================
-// UI COMPONENTS
-// ========================
+
 
 class _LiveIndicator extends StatelessWidget {
   @override
