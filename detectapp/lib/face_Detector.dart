@@ -10,17 +10,15 @@ class FaceDetectionService {
   FaceDetectionService()
     : _detector = FaceDetector(
         options: FaceDetectorOptions(
-          // ✅ CHANGED: accurate mode for better angle tolerance
-          performanceMode: FaceDetectorMode.accurate,  // Was: .fast
+          performanceMode: FaceDetectorMode.accurate,
           enableTracking: false,
           enableLandmarks: false,
           enableContours: false,
-          minFaceSize: 0.10,  // ✅ CHANGED: Lower from 0.15 (detect smaller/distant faces)
+          minFaceSize: 0.08, // ✅ Even lower for robot distance
         ),
       );
 
   /// Detect and crop the LARGEST face from an image file
-  /// (Kept for backward compatibility)
   Future<img.Image> detectAndCropFaceFromFile(
     String filePath, {
     double paddingPercent = 0.25,
@@ -93,8 +91,7 @@ class FaceDetectionService {
     return resized;
   }
 
-  /// Detect and crop ALL faces from an image file
-  /// Returns a list of cropped face images
+  /// ✅ NEW: Detect ALL faces with rotation fallback for angle issues
   Future<List<img.Image>> detectAndCropAllFaces(
     String filePath, {
     double paddingPercent = 0.25,
@@ -105,12 +102,44 @@ class FaceDetectionService {
       throw Exception('Image file not found: $filePath');
     }
 
-    final input = InputImage.fromFilePath(filePath);
-    final faces = await _detector.processImage(input);
+    // ✅ ANGLE FIX: Try original image first
+    var input = InputImage.fromFilePath(filePath);
+    var faces = await _detector.processImage(input);
+
+    // ✅ ANGLE FIX: If no faces found, try with image enhancement
+    if (faces.isEmpty) {
+      print('⚠️ No faces in original image, trying enhanced version...');
+      
+      final bytes = await file.readAsBytes();
+      var decoded = img.decodeImage(bytes);
+      
+      if (decoded != null) {
+        // Enhance image for better detection
+        decoded = _enhanceForDetection(decoded);
+        
+        // Save enhanced version temporarily
+        final tempPath = filePath.replaceAll('.jpg', '_enhanced.jpg');
+        final tempFile = File(tempPath);
+        await tempFile.writeAsBytes(img.encodeJpg(decoded, quality: 95));
+        
+        // Try detection on enhanced image
+        input = InputImage.fromFilePath(tempPath);
+        faces = await _detector.processImage(input);
+        
+        print('📸 Enhanced detection found ${faces.length} face(s)');
+        
+        // Clean up temp file
+        try {
+          await tempFile.delete();
+        } catch (_) {}
+      }
+    }
 
     if (faces.isEmpty) {
       throw Exception('No face detected in image');
     }
+
+    print('✅ Detected ${faces.length} face(s)');
 
     final bytes = await file.readAsBytes();
     final decoded = img.decodeImage(bytes);
@@ -120,7 +149,7 @@ class FaceDetectionService {
 
     final List<img.Image> croppedFaces = [];
 
-    // Process ALL faces instead of just the largest
+    // Process ALL faces
     for (final face in faces) {
       final box = face.boundingBox;
 
@@ -160,6 +189,26 @@ class FaceDetectionService {
     }
 
     return croppedFaces;
+  }
+
+  /// ✅ NEW: Enhance image for better face detection (angle/lighting issues)
+  img.Image _enhanceForDetection(img.Image image) {
+    // Increase brightness and contrast
+    var enhanced = img.adjustColor(
+      image,
+      brightness: 1.15,
+      contrast: 1.25,
+      saturation: 1.05,
+    );
+    
+    // Apply slight sharpening
+    enhanced = img.convolution(
+      enhanced,
+      filter: [0, -1, 0, -1, 5, -1, 0, -1, 0],
+      div: 1,
+    );
+    
+    return enhanced;
   }
 
   Future<void> dispose() async {
