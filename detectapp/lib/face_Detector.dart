@@ -10,11 +10,12 @@ class FaceDetectionService {
   FaceDetectionService()
     : _detector = FaceDetector(
         options: FaceDetectorOptions(
-          performanceMode: FaceDetectorMode.fast,
+          // ✅ CHANGED: accurate mode for better angle tolerance
+          performanceMode: FaceDetectorMode.accurate,  // Was: .fast
           enableTracking: false,
           enableLandmarks: false,
           enableContours: false,
-          minFaceSize: 0.15,
+          minFaceSize: 0.10,  // ✅ CHANGED: Lower from 0.15 (detect smaller/distant faces)
         ),
       );
 
