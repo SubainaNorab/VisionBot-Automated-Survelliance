@@ -1,4 +1,4 @@
-
+// main.dart
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -126,8 +126,6 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> {
   }
 }
 
-
-
 class _LiveIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -148,6 +146,7 @@ class _LiveIndicator extends StatelessWidget {
   }
 }
 
+// ✅ UPDATED: Status Panel with multi-line detection status
 class _StatusPanel extends StatelessWidget {
   final SurveillanceState state;
   final bool autoVerify;
@@ -187,12 +186,9 @@ class _StatusPanel extends StatelessWidget {
           ),
           const SizedBox(height: 8),
 
-          // Detection status
-          _StatusRow(
-            icon: Icons.people,
-            label: 'Detection:',
-            value: state.detectionStatus,
-            color: Colors.orangeAccent,
+          // ✅ UPDATED: Detection status - Now multi-line
+          _MultiLineStatusSection(
+            detectionStatus: state.detectionStatus,
           ),
           const SizedBox(height: 16),
 
@@ -222,6 +218,109 @@ class _StatusPanel extends StatelessWidget {
             style: ElevatedButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 14),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ✅ NEW: Multi-line detection status widget
+class _MultiLineStatusSection extends StatelessWidget {
+  final String detectionStatus;
+
+  const _MultiLineStatusSection({required this.detectionStatus});
+
+  @override
+  Widget build(BuildContext context) {
+    // Parse the detection status string
+    // Format: "People: 3 (2 known, 1 unknown) | Group: YES | Smoke: NO (150ms)"
+    
+    final parts = detectionStatus.split('|').map((e) => e.trim()).toList();
+    
+    String peoplePart = '';
+    String groupPart = '';
+    String smokePart = '';
+    
+    for (final part in parts) {
+      if (part.startsWith('People:')) {
+        peoplePart = part;
+      } else if (part.startsWith('Group:')) {
+        groupPart = part;
+      } else if (part.startsWith('Smoke:')) {
+        smokePart = part;
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.orangeAccent.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Row(
+            children: [
+              Icon(Icons.people, color: Colors.orangeAccent, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Detection Status',
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          
+          // ✅ ROW 1: People count (can be long with breakdown)
+          if (peoplePart.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                peoplePart,
+                style: TextStyle(color: Colors.orangeAccent, fontSize: 13),
+                maxLines: 2, // ✅ Allow 2 lines for long text
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          
+          // ✅ ROW 2: Group and Smoke status
+          Row(
+            children: [
+              if (groupPart.isNotEmpty)
+                Expanded(
+                  child: Text(
+                    groupPart,
+                    style: TextStyle(
+                      color: groupPart.contains('YES') 
+                          ? Colors.redAccent 
+                          : Colors.grey,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              const SizedBox(width: 12),
+              if (smokePart.isNotEmpty)
+                Expanded(
+                  child: Text(
+                    smokePart,
+                    style: TextStyle(
+                      color: smokePart.contains('YES') 
+                          ? Colors.redAccent 
+                          : Colors.grey,
+                      fontSize: 13,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
           ),
         ],
       ),
@@ -261,6 +360,7 @@ class _StatusRow extends StatelessWidget {
             value,
             style: TextStyle(color: color),
             overflow: TextOverflow.ellipsis,
+            maxLines: 2, // ✅ Allow wrapping
           ),
         ),
       ],
