@@ -1,5 +1,4 @@
 // surveillance_controller.dart
-// Business logic coordinator for surveillance system
 
 import 'dart:async';
 import 'dart:collection';
@@ -85,13 +84,19 @@ class SurveillanceController {
   int _frameCount = 0;
   static const int _frameSkip = 5;
 
-  // ✅ SOLUTION 1: Frame buffering flags
+  // Frame buffering flags
   bool _shouldVerifyNextCycle = false;
   bool _processingVerification = false;
 
-  // ✅ SOLUTION 3: Face tracking cache to avoid re-verification
+  // Face tracking cache
   final Map<String, DateTime> _recentlyVerified = {};
   final Duration _verificationCacheDuration = Duration(seconds: 30);
+
+  // ✅ NEW: Track last verification results for group correlation
+  int _lastVerifiedFaceCount = 0;
+  int _lastKnownCount = 0;
+  int _lastUnknownCount = 0;
+  DateTime _lastVerificationTime = DateTime.fromMillisecondsSinceEpoch(0);
 
   Stream<SurveillanceState> get stateStream => _stateController.stream;
   SurveillanceState get currentState => _state;
@@ -139,19 +144,40 @@ class SurveillanceController {
     }
   }
 
-  /// Poll detection results and update UI
+  /// ✅ UPDATED: Poll detection results with face correlation
   void _startStatusPolling() {
     _statusTimer?.cancel();
     _statusTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
       final det = _multi.lastResult;
 
-      // Use YOLO person count directly (no workarounds)
-      int totalPeople = det.personCount;
+      // YOLO person count
+      int yoloPeople = det.personCount;
+      
+      // ✅ NEW: Check if we have recent face verification data
+      final timeSinceVerification = DateTime.now().difference(_lastVerificationTime);
+      final hasRecentVerification = timeSinceVerification.inSeconds < 5;
+
+      // ✅ NEW: Combine YOLO and face data if recent verification exists
+      int totalPeople = yoloPeople;
+      String peopleBreakdown = '';
+      
+      if (hasRecentVerification && _lastVerifiedFaceCount > 0) {
+        // Use face count if YOLO missed people (faces are more accurate for count)
+        if (_lastVerifiedFaceCount > yoloPeople) {
+          totalPeople = _lastVerifiedFaceCount;
+          debugPrint('📊 Using face count ($totalPeople) over YOLO count ($yoloPeople)');
+        }
+        
+        // Add breakdown
+        if (_lastKnownCount > 0 || _lastUnknownCount > 0) {
+          peopleBreakdown = ' (${_lastKnownCount} known, ${_lastUnknownCount} unknown)';
+        }
+      }
 
       bool isGroup = totalPeople >= _multi.groupThreshold;
 
       final status =
-          'People: $totalPeople | Group: ${isGroup ? "YES" : "NO"} | Smoke: ${det.smokingDetected ? "YES" : "NO"} (${det.processingTimeMs}ms)';
+          'People: $totalPeople$peopleBreakdown | Group: ${isGroup ? "YES" : "NO"} | Smoke: ${det.smokingDetected ? "YES" : "NO"} (${det.processingTimeMs}ms)';
 
       _updateState(_state.copyWith(
         detectionStatus: status,
@@ -160,11 +186,10 @@ class SurveillanceController {
         smokingDetected: det.smokingDetected,
       ));
 
-      _handleDetectionAlerts(det, totalPeople, isGroup);
+      _handleDetectionAlerts(det, totalPeople, isGroup, peopleBreakdown);
     });
   }
 
-  // ✅ SOLUTION 3: Clean up old cache entries every minute
   void _startCacheCleanup() {
     _cacheCleanupTimer?.cancel();
     _cacheCleanupTimer = Timer.periodic(const Duration(minutes: 1), (_) {
@@ -184,17 +209,19 @@ class SurveillanceController {
     }
   }
 
+  /// ✅ UPDATED: Handle alerts with face breakdown
   void _handleDetectionAlerts(
     DetectionResult det,
     int totalPeople,
     bool isGroup,
+    String peopleBreakdown,
   ) {
     final lensName =
         _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
-    // Group alert
+    // Group alert with face details
     if (isGroup && !_lastGroupState) {
-      debugPrint('🚨 GROUP DETECTED: $totalPeople people');
+      debugPrint('🚨 GROUP DETECTED: $totalPeople people$peopleBreakdown');
       _alertService
           .createGroupAlert(
             personCount: totalPeople,
@@ -214,27 +241,31 @@ class SurveillanceController {
     _lastSmokeState = det.smokingDetected;
   }
 
-  // ✅ SOLUTION 1: Modified _onFrame - triggers verification flag
   void _onFrame(CameraImage image) {
     if (!_multi.isInitialized) return;
 
     _frameCount++;
     
-    // YOLO detection (every 5 frames) - UNCHANGED
+    // YOLO detection (every 5 frames)
     if (_frameCount % _frameSkip == 0) {
       _multi.detectAllAsync(image);
     }
     
-    // ✅ NEW: Set flag for face verification (every 90 frames ~3s)
-    // Actual verification happens by stopping stream briefly
+    // ✅ UPDATED: Trigger verification when YOLO detects people
+    // Or every 90 frames as backup
+    final det = _multi.lastResult;
+    final hasPeople = det.personCount > 0;
+    
     if (_frameCount % 90 == 0 && _autoVerify && !_processingVerification) {
-      _shouldVerifyNextCycle = true;
-      _triggerBackgroundVerification();
+      // Verify more frequently if people detected
+      if (hasPeople || _frameCount % 90 == 0) {
+        _shouldVerifyNextCycle = true;
+        _triggerBackgroundVerification();
+      }
     }
   }
 
-  // ✅ SOLUTION 1 (REVISED): Background verification with brief stream pause
-  // This is MORE RELIABLE than YUV conversion for face detection
+  /// Background verification with brief stream pause
   Future<void> _triggerBackgroundVerification() async {
     if (_processingVerification || !_shouldVerifyNextCycle) return;
     
@@ -247,17 +278,12 @@ class SurveillanceController {
     ));
     
     try {
-      // ✅ CRITICAL FIX: Briefly pause stream, take photo, resume
-      // This is more reliable than YUV conversion for ML Kit
       await _camera.stopStream();
-      
-      // Small delay to ensure stream fully stopped
       await Future.delayed(const Duration(milliseconds: 50));
       
-      // Capture photo
       final shot = await _camera.takePicture();
       
-      // Immediately restart stream (minimize blind time)
+      // Immediately restart stream
       unawaited(_camera.startStream(_onFrame));
       
       debugPrint('📸 Background: Photo captured, stream restarting...');
@@ -270,16 +296,22 @@ class SurveillanceController {
       // Verify all faces
       final results = _verifier.verifyMultipleFaces(faces);
       
-      // Process results with tracking
-      _processVerificationResults(results);
+      // Process results
+      _processVerificationResults(results, faces.length);
       
-      // Clean up photo file
+      // Clean up
       try {
         await File(shot.path).delete();
       } catch (_) {}
       
     } catch (e) {
       if (e.toString().contains('No face')) {
+        // ✅ NEW: Reset face count when no faces detected
+        _lastVerifiedFaceCount = 0;
+        _lastKnownCount = 0;
+        _lastUnknownCount = 0;
+        _lastVerificationTime = DateTime.now();
+        
         _updateState(_state.copyWith(faceStatus: 'No faces detected'));
         debugPrint('⚠️ Background verify: No faces in frame');
       } else {
@@ -287,7 +319,6 @@ class SurveillanceController {
         _updateState(_state.copyWith(faceStatus: 'Verify error'));
       }
       
-      // Ensure stream is running even if error occurred
       try {
         if (!_camera.isInitialized || !(_camera.controller?.value.isStreamingImages ?? false)) {
           await _camera.startStream(_onFrame);
@@ -301,18 +332,17 @@ class SurveillanceController {
     }
   }
 
-  // ✅ SOLUTION 3: Process verification results with tracking cache
-  void _processVerificationResults(List<VerificationResult> results) {
+  /// ✅ UPDATED: Process verification results and update counts
+  void _processVerificationResults(List<VerificationResult> results, int totalFaces) {
     int knownCount = 0;
     int unknownCount = 0;
     final knownNames = <String>[];
-    final newKnownNames = <String>[]; // Names not recently verified
+    final newKnownNames = <String>[];
 
     for (final result in results) {
       if (result.verified && result.person != null) {
         final name = result.person!.name;
         
-        // ✅ SOLUTION 3: Check if recently verified (within 30 seconds)
         final lastVerified = _recentlyVerified[name];
         final isRecent = lastVerified != null && 
             DateTime.now().difference(lastVerified) < _verificationCacheDuration;
@@ -324,7 +354,6 @@ class SurveillanceController {
           debugPrint('✅ NEW verification: $name');
         }
         
-        // ✅ SOLUTION 3: Update cache
         _recentlyVerified[name] = DateTime.now();
         
         knownCount++;
@@ -336,9 +365,15 @@ class SurveillanceController {
       }
     }
 
-    debugPrint('📊 Verification results: $knownCount known (${newKnownNames.length} new), $unknownCount unknown');
+    // ✅ NEW: Update tracked counts for group detection
+    _lastVerifiedFaceCount = totalFaces;
+    _lastKnownCount = knownCount;
+    _lastUnknownCount = unknownCount;
+    _lastVerificationTime = DateTime.now();
 
-    // Create alert ONLY for unknown faces (known faces already tracked)
+    debugPrint('📊 Verification: ${totalFaces} faces total ($knownCount known, $unknownCount unknown)');
+
+    // Create alert for unknown faces
     if (unknownCount > 0) {
       final lensName = _camera.lensDirection == CameraLensDirection.front
           ? 'front'
@@ -351,7 +386,7 @@ class SurveillanceController {
       );
     }
 
-    // Update UI with results
+    // Update UI
     String statusMsg;
     if (knownCount > 0 && unknownCount > 0) {
       statusMsg = '✅ ${knownNames.join(", ")} | ⚠️ $unknownCount unknown';
@@ -371,10 +406,7 @@ class SurveillanceController {
     _verifyTimer?.cancel();
     if (!_autoVerify) return;
 
-    // Timer is now just a safety fallback
-    // Main verification happens in _onFrame
     _verifyTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-      // Cleanup task
       _cleanVerificationCache();
     });
   }
@@ -385,7 +417,7 @@ class SurveillanceController {
     debugPrint('🔄 Auto verify ${enabled ? "enabled" : "disabled"}');
   }
 
-  /// Manual face verification (stops stream - used by button press)
+  /// Manual face verification
   Future<void> verifyFace() async {
     if (_processingVerification) {
       debugPrint('⚠️ Verification already in progress');
@@ -400,16 +432,13 @@ class SurveillanceController {
     ));
 
     try {
-      // Stop stream to capture photo
       await _camera.stopStream();
-      
       await Future.delayed(const Duration(milliseconds: 50));
 
       final shot = await _camera.takePicture();
 
       _updateState(_state.copyWith(faceStatus: 'Detecting faces...'));
       
-      // Detect ALL faces in the image
       final faces = await _detector.detectAndCropAllFaces(shot.path);
       
       debugPrint('📸 Manual: Detected ${faces.length} face(s) in frame');
@@ -418,13 +447,10 @@ class SurveillanceController {
         faceStatus: 'Verifying ${faces.length} face(s)...',
       ));
       
-      // Verify all detected faces
       final results = _verifier.verifyMultipleFaces(faces);
 
-      // Process results with tracking
-      _processVerificationResults(results);
+      _processVerificationResults(results, faces.length);
       
-      // Clean up
       try {
         await File(shot.path).delete();
       } catch (_) {}
@@ -437,7 +463,6 @@ class SurveillanceController {
       _updateState(_state.copyWith(faceStatus: errorMsg));
       debugPrint('⚠️ Manual verification failed: $e');
     } finally {
-      // Restart stream
       try {
         await _camera.startStream(_onFrame);
       } catch (e) {
@@ -449,7 +474,6 @@ class SurveillanceController {
     }
   }
 
-  /// Switch between front and back camera
   Future<void> switchCamera() async {
     try {
       _updateState(_state.copyWith(faceStatus: 'Switching camera...'));
@@ -460,18 +484,22 @@ class SurveillanceController {
       await _camera.switchCamera();
       await _camera.startStream(_onFrame);
 
-      // Reset cooldowns and cache
       _alertService.resetCooldowns();
       _lastGroupState = false;
       _lastSmokeState = false;
       _recentlyVerified.clear();
       _processingVerification = false;
       _shouldVerifyNextCycle = false;
+      
+      // ✅ NEW: Reset face tracking
+      _lastVerifiedFaceCount = 0;
+      _lastKnownCount = 0;
+      _lastUnknownCount = 0;
 
       _updateState(_state.copyWith(faceStatus: 'Ready'));
       _startAutoVerify();
 
-      debugPrint('📷 Camera switched, cache cleared');
+      debugPrint('📷 Camera switched, all counters reset');
     } catch (e) {
       _updateState(_state.copyWith(faceStatus: 'Switch failed: $e'));
       debugPrint('❌ Camera switch failed: $e');
@@ -488,7 +516,6 @@ class SurveillanceController {
     _stateController.add(_state);
   }
 
-  /// Clean up all resources
   Future<void> dispose() async {
     _verifyTimer?.cancel();
     _statusTimer?.cancel();
