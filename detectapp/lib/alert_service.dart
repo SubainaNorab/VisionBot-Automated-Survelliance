@@ -1,3 +1,5 @@
+// alert_service.dart - UPDATED WITH IMAGE SUPPORT
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
@@ -7,18 +9,19 @@ class AlertService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   DateTime? _lastAlertAt;
- 
   DateTime? _lastGroupAt;
   DateTime? _lastSmokeAt;
 
   final int _faceCooldownMs = 2500;
-  final int _groupCooldownMs = 5000; // 5 seconds for group
+  final int _groupCooldownMs = 5000;
   final int _smokeCooldownMs = 3000;
 
   Future<void> createUnknownAlert({
     required double threshold,
     required String lens,
     String note = '',
+    String? imagePath,
+    List<String>? faceImagePaths,
   }) async {
     final now = DateTime.now();
 
@@ -38,13 +41,19 @@ class AlertService {
       'threshold': threshold,
       'lens': lens,
       'note': note,
+      'image_path': imagePath,
+      'face_image_paths': faceImagePaths,
+      'has_image': imagePath != null,
+      'face_count': faceImagePaths?.length ?? 0,
     });
+    
+    debugPrint('✅ Unknown face alert saved${imagePath != null ? ' with image' : ''}');
   }
 
-// group detection alert
   Future<void> createGroupAlert({
     required int personCount,
     required String lens,
+    String? imagePath,
   }) async {
     final now = DateTime.now();
 
@@ -63,16 +72,18 @@ class AlertService {
         'person_count': personCount,
         'lens': lens,
         'note': 'Group of $personCount people detected',
+        'image_path': imagePath,
+        'has_image': imagePath != null,
       });
-      debugPrint('✅ Group alert saved (count: $personCount)');
+      debugPrint('✅ Group alert saved (count: $personCount)${imagePath != null ? ' with image' : ''}');
     } catch (e) {
       debugPrint('❌ Failed to save group alert: $e');
     }
   }
 
-  // smoking detection alert
   Future<void> createSmokingAlert({
     required String lens,
+    String? imagePath,
   }) async {
     final now = DateTime.now();
 
@@ -90,14 +101,15 @@ class AlertService {
         'created_at_local': now.toIso8601String(),
         'lens': lens,
         'note': 'Smoking detected',
+        'image_path': imagePath,
+        'has_image': imagePath != null,
       });
-      debugPrint(' Smoking alert saved');
+      debugPrint('🚬 Smoking alert saved${imagePath != null ? ' with image' : ''}');
     } catch (e) {
-      debugPrint(' Failed to save smoking alert: $e');
+      debugPrint('❌ Failed to save smoking alert: $e');
     }
   }
 
-  // Reset cooldowns
   void resetCooldowns() {
     _lastAlertAt = null;
     _lastGroupAt = null;

@@ -1,11 +1,38 @@
-// face_detector.dart
+// face_detector.dart - RELAXED DISTANCE FOR 4-6 FOOTSTEPS
 
 import 'dart:io';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 
+class FaceInfo {
+  final img.Image croppedFace;
+  final double distanceScore;
+  final int originalWidth;
+  final int originalHeight;
+  final String distanceStatus;
+  
+  FaceInfo({
+    required this.croppedFace,
+    required this.distanceScore,
+    required this.originalWidth,
+    required this.originalHeight,
+    required this.distanceStatus,
+  });
+  
+  bool get isTooFar => distanceScore == 0.0;
+  bool get isTooClose => distanceScore == 2.0;
+  bool get isGoodDistance => distanceScore >= 0.5 && distanceScore <= 1.0;
+  bool get isPerfectDistance => distanceScore == 1.0;
+}
+
 class FaceDetectionService {
   final FaceDetector _detector;
+
+  // ✅ UPDATED: Much more relaxed distance thresholds for 4-6 footsteps (2-4 meters)
+  int minFaceWidth = 50;   // Was 100, now 50 (detect from 2x further)
+  int maxFaceWidth = 500;  // Was 400, now 500 (allow closer)
+  int idealMinWidth = 80;  // Was 150, now 80 (better range)
+  int idealMaxWidth = 450; // Was 350, now 450 (wider ideal range)
 
   FaceDetectionService()
     : _detector = FaceDetector(
@@ -14,11 +41,23 @@ class FaceDetectionService {
           enableTracking: false,
           enableLandmarks: false,
           enableContours: false,
-          minFaceSize: 0.08, // ✅ Even lower for robot distance
+          minFaceSize: 0.05, // ✅ Was 0.08, now 0.05 (detect smaller/further faces - 60% smaller)
         ),
       );
 
-  /// Detect and crop the LARGEST face from an image file
+  void setDistanceThresholds({
+    required int minWidth,
+    required int maxWidth,
+    required int idealMin,
+    required int idealMax,
+  }) {
+    minFaceWidth = minWidth;
+    maxFaceWidth = maxWidth;
+    idealMinWidth = idealMin;
+    idealMaxWidth = idealMax;
+    print('📏 Distance thresholds updated: $minWidth-$maxWidth (ideal: $idealMin-$idealMax)');
+  }
+
   Future<img.Image> detectAndCropFaceFromFile(
     String filePath, {
     double paddingPercent = 0.25,
@@ -91,8 +130,7 @@ class FaceDetectionService {
     return resized;
   }
 
-  /// ✅ NEW: Detect ALL faces with rotation fallback for angle issues
-  Future<List<img.Image>> detectAndCropAllFaces(
+  Future<List<FaceInfo>> detectAndCropAllFacesWithDistance(
     String filePath, {
     double paddingPercent = 0.25,
     int outputSize = 160,
@@ -102,11 +140,9 @@ class FaceDetectionService {
       throw Exception('Image file not found: $filePath');
     }
 
-    // ✅ ANGLE FIX: Try original image first
     var input = InputImage.fromFilePath(filePath);
     var faces = await _detector.processImage(input);
 
-    // ✅ ANGLE FIX: If no faces found, try with image enhancement
     if (faces.isEmpty) {
       print('⚠️ No faces in original image, trying enhanced version...');
       
@@ -114,21 +150,17 @@ class FaceDetectionService {
       var decoded = img.decodeImage(bytes);
       
       if (decoded != null) {
-        // Enhance image for better detection
         decoded = _enhanceForDetection(decoded);
         
-        // Save enhanced version temporarily
         final tempPath = filePath.replaceAll('.jpg', '_enhanced.jpg');
         final tempFile = File(tempPath);
         await tempFile.writeAsBytes(img.encodeJpg(decoded, quality: 95));
         
-        // Try detection on enhanced image
         input = InputImage.fromFilePath(tempPath);
         faces = await _detector.processImage(input);
         
         print('📸 Enhanced detection found ${faces.length} face(s)');
         
-        // Clean up temp file
         try {
           await tempFile.delete();
         } catch (_) {}
@@ -139,7 +171,7 @@ class FaceDetectionService {
       throw Exception('No face detected in image');
     }
 
-    print('✅ Detected ${faces.length} face(s)');
+    print('✅ ML Kit detected ${faces.length} face(s)');
 
     final bytes = await file.readAsBytes();
     final decoded = img.decodeImage(bytes);
@@ -147,11 +179,18 @@ class FaceDetectionService {
       throw Exception('Failed to decode image bytes');
     }
 
-    final List<img.Image> croppedFaces = [];
+    final List<FaceInfo> faceInfoList = [];
 
-    // Process ALL faces
-    for (final face in faces) {
+    for (int i = 0; i < faces.length; i++) {
+      final face = faces[i];
       final box = face.boundingBox;
+
+      final originalWidth = box.width.toInt();
+      final originalHeight = box.height.toInt();
+
+      final distanceResult = _calculateDistanceScore(originalWidth);
+
+      print('👤 Face ${i + 1}: ${originalWidth}x${originalHeight}px - ${distanceResult['status']}');
 
       int x = box.left.round();
       int y = box.top.round();
@@ -185,15 +224,57 @@ class FaceDetectionService {
         interpolation: img.Interpolation.average,
       );
 
-      croppedFaces.add(resized);
+      faceInfoList.add(FaceInfo(
+        croppedFace: resized,
+        distanceScore: distanceResult['score'] as double,
+        originalWidth: originalWidth,
+        originalHeight: originalHeight,
+        distanceStatus: distanceResult['status'] as String,
+      ));
     }
 
-    return croppedFaces;
+    return faceInfoList;
   }
 
-  /// ✅ NEW: Enhance image for better face detection (angle/lighting issues)
+  Future<List<img.Image>> detectAndCropAllFaces(
+    String filePath, {
+    double paddingPercent = 0.25,
+    int outputSize = 160,
+  }) async {
+    final faceInfos = await detectAndCropAllFacesWithDistance(
+      filePath,
+      paddingPercent: paddingPercent,
+      outputSize: outputSize,
+    );
+    
+    return faceInfos.map((info) => info.croppedFace).toList();
+  }
+
+  Map<String, dynamic> _calculateDistanceScore(int faceWidth) {
+    double score;
+    String status;
+
+    if (faceWidth < minFaceWidth) {
+      score = 0.0;
+      status = '❌ TOO FAR (${faceWidth}px < ${minFaceWidth}px)';
+    } else if (faceWidth > maxFaceWidth) {
+      score = 2.0;
+      status = '❌ TOO CLOSE (${faceWidth}px > ${maxFaceWidth}px)';
+    } else if (faceWidth >= idealMinWidth && faceWidth <= idealMaxWidth) {
+      score = 1.0;
+      status = '✅ PERFECT (${faceWidth}px)';
+    } else {
+      score = 0.5;
+      status = '⚠️ ACCEPTABLE (${faceWidth}px)';
+    }
+
+    return {
+      'score': score,
+      'status': status,
+    };
+  }
+
   img.Image _enhanceForDetection(img.Image image) {
-    // Increase brightness and contrast
     var enhanced = img.adjustColor(
       image,
       brightness: 1.15,
@@ -201,7 +282,6 @@ class FaceDetectionService {
       saturation: 1.05,
     );
     
-    // Apply slight sharpening
     enhanced = img.convolution(
       enhanced,
       filter: [0, -1, 0, -1, 5, -1, 0, -1, 0],

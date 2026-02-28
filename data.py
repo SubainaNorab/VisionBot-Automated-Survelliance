@@ -21,9 +21,11 @@ ENROLLED_IMAGES_DIR = 'enrolled_faces'
 
 
 PEOPLE_TO_ENROLL = {
-    'Shaham': 'Shaham.jpeg',
-  
-    
+    'Sawaira': 'sawaira.jpeg',
+    'Kashaf': 'kashaf.jpeg',
+    'Tehreem': 'tehreem.jpeg',
+    'Zainab': 'zainab.jpeg',
+    'Ali': 'ali.jpeg',
 }
 
 
