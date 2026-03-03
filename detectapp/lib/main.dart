@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 import 'firebase_options.dart';
-import 'survelliance_controller.dart';
+import 'controllers/survelliance_controller.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

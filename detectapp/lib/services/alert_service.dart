@@ -1,4 +1,5 @@
-// alert_service.dart - UPDATED WITH IMAGE SUPPORT
+// alert_service.dart - UPDATED WITH LOCATION SUPPORT
+// ⚠️ IMPORTANT: All existing functionality preserved. Only location fields added.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
@@ -22,6 +23,11 @@ class AlertService {
     String note = '',
     String? imagePath,
     List<String>? faceImagePaths,
+    // ✅ NEW: location fields (optional — won't break if not provided)
+    double? latitude,
+    double? longitude,
+    String? placeName,
+    String? address,
   }) async {
     final now = DateTime.now();
 
@@ -34,7 +40,8 @@ class AlertService {
 
     _lastAlertAt = now;
 
-    await _db.collection(_collection).add({
+    // ✅ Build data map — location fields added but won't break if null
+    final data = <String, dynamic>{
       'type': 'unknown_face',
       'created_at': FieldValue.serverTimestamp(),
       'created_at_local': now.toIso8601String(),
@@ -45,15 +52,36 @@ class AlertService {
       'face_image_paths': faceImagePaths,
       'has_image': imagePath != null,
       'face_count': faceImagePaths?.length ?? 0,
-    });
-    
-    debugPrint('✅ Unknown face alert saved${imagePath != null ? ' with image' : ''}');
+    };
+
+    // ✅ Add location data only if available
+    if (latitude != null && longitude != null) {
+      data['latitude'] = latitude;
+      data['longitude'] = longitude;
+      data['place_name'] = placeName ?? 'Unknown location';
+      data['address'] = address ?? '';
+      data['has_location'] = true;
+      data['geo_point'] = GeoPoint(latitude, longitude);
+    } else {
+      data['has_location'] = false;
+    }
+
+    await _db.collection(_collection).add(data);
+
+    debugPrint('✅ Unknown face alert saved'
+        '${imagePath != null ? ' with image' : ''}'
+        '${latitude != null ? ' at $placeName' : ''}');
   }
 
   Future<void> createGroupAlert({
     required int personCount,
     required String lens,
     String? imagePath,
+    // ✅ NEW: location fields
+    double? latitude,
+    double? longitude,
+    String? placeName,
+    String? address,
   }) async {
     final now = DateTime.now();
 
@@ -65,7 +93,7 @@ class AlertService {
     _lastGroupAt = now;
 
     try {
-      await _db.collection(_collection).add({
+      final data = <String, dynamic>{
         'type': 'group_detected',
         'created_at': FieldValue.serverTimestamp(),
         'created_at_local': now.toIso8601String(),
@@ -74,8 +102,23 @@ class AlertService {
         'note': 'Group of $personCount people detected',
         'image_path': imagePath,
         'has_image': imagePath != null,
-      });
-      debugPrint('✅ Group alert saved (count: $personCount)${imagePath != null ? ' with image' : ''}');
+      };
+
+      if (latitude != null && longitude != null) {
+        data['latitude'] = latitude;
+        data['longitude'] = longitude;
+        data['place_name'] = placeName ?? 'Unknown location';
+        data['address'] = address ?? '';
+        data['has_location'] = true;
+        data['geo_point'] = GeoPoint(latitude, longitude);
+      } else {
+        data['has_location'] = false;
+      }
+
+      await _db.collection(_collection).add(data);
+      debugPrint('✅ Group alert saved (count: $personCount)'
+          '${imagePath != null ? ' with image' : ''}'
+          '${latitude != null ? ' at $placeName' : ''}');
     } catch (e) {
       debugPrint('❌ Failed to save group alert: $e');
     }
@@ -84,6 +127,11 @@ class AlertService {
   Future<void> createSmokingAlert({
     required String lens,
     String? imagePath,
+    // ✅ NEW: location fields
+    double? latitude,
+    double? longitude,
+    String? placeName,
+    String? address,
   }) async {
     final now = DateTime.now();
 
@@ -95,7 +143,7 @@ class AlertService {
     _lastSmokeAt = now;
 
     try {
-      await _db.collection(_collection).add({
+      final data = <String, dynamic>{
         'type': 'smoking_detected',
         'created_at': FieldValue.serverTimestamp(),
         'created_at_local': now.toIso8601String(),
@@ -103,8 +151,23 @@ class AlertService {
         'note': 'Smoking detected',
         'image_path': imagePath,
         'has_image': imagePath != null,
-      });
-      debugPrint('🚬 Smoking alert saved${imagePath != null ? ' with image' : ''}');
+      };
+
+      if (latitude != null && longitude != null) {
+        data['latitude'] = latitude;
+        data['longitude'] = longitude;
+        data['place_name'] = placeName ?? 'Unknown location';
+        data['address'] = address ?? '';
+        data['has_location'] = true;
+        data['geo_point'] = GeoPoint(latitude, longitude);
+      } else {
+        data['has_location'] = false;
+      }
+
+      await _db.collection(_collection).add(data);
+      debugPrint('🚬 Smoking alert saved'
+          '${imagePath != null ? ' with image' : ''}'
+          '${latitude != null ? ' at $placeName' : ''}');
     } catch (e) {
       debugPrint('❌ Failed to save smoking alert: $e');
     }
