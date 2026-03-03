@@ -604,8 +604,12 @@ class SurveillanceController {
 
       // ✅ STEP 1: Fetch GPS location CONCURRENTLY with image saving
       debugPrint('🌍 Step 0: Fetching GPS location...');
-      final locationFuture =
-          _locationService.getLocationFast(maxAgeSeconds: 30);
+      final location = await _locationService
+    .getLocationFast(maxAgeSeconds: 30)
+    .timeout(const Duration(seconds: 10), onTimeout: () {
+  debugPrint('⚠️ GPS timed out — alert will have no location');
+  return null;
+});
 
       // STEP 1: Save full frame image (existing logic preserved)
       if (_lastCapturedImagePath != null) {
@@ -636,7 +640,7 @@ class SurveillanceController {
       }
 
       // ✅ STEP 3: Await location result
-      final location = await locationFuture;
+      // final location = await locationFuture;
       if (location != null) {
         debugPrint('   📍 Location: ${location.placeName}');
         debugPrint('   📍 Coords: ${location.latitude}, ${location.longitude}');

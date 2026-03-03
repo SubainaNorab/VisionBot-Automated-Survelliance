@@ -1,13 +1,16 @@
-// alert_service.dart - UPDATED WITH LOCATION SUPPORT
-// ⚠️ IMPORTANT: All existing functionality preserved. Only location fields added.
+// lib/services/alert_service.dart
+// KEY FIX: uploads images to Firebase Storage before saving URL to Firestore
 
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
 class AlertService {
   static const String _collection = 'alerts';
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final FirebaseStorage _storage = FirebaseStorage.instance; // ✅ ADDED
 
   DateTime? _lastAlertAt;
   DateTime? _lastGroupAt;
@@ -17,30 +20,53 @@ class AlertService {
   final int _groupCooldownMs = 5000;
   final int _smokeCooldownMs = 3000;
 
+  // ✅ FIX: uploads image to Storage and saves download URL (not local path)
+  Future<String?> _uploadImage(String? localPath, String folder) async {
+    if (localPath == null) return null;
+    final file = File(localPath);
+    if (!await file.exists()) {
+      debugPrint('⚠️ Image not found for upload: $localPath');
+      return null;
+    }
+    try {
+      final name = '${folder}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final ref = _storage.ref().child('alerts/$folder/$name');
+      await ref.putFile(file, SettableMetadata(contentType: 'image/jpeg'));
+      final url = await ref.getDownloadURL();
+      debugPrint('📤 Image uploaded: $url');
+      return url;
+    } catch (e) {
+      debugPrint('❌ Image upload failed: $e');
+      return null;
+    }
+  }
+
   Future<void> createUnknownAlert({
     required double threshold,
     required String lens,
     String note = '',
     String? imagePath,
     List<String>? faceImagePaths,
-    // ✅ NEW: location fields (optional — won't break if not provided)
     double? latitude,
     double? longitude,
     String? placeName,
     String? address,
   }) async {
     final now = DateTime.now();
-
-    if (_lastAlertAt != null) {
-      final diff = now.difference(_lastAlertAt!).inMilliseconds;
-      if (diff < _faceCooldownMs) {
-        return;
-      }
+    if (_lastAlertAt != null &&
+        now.difference(_lastAlertAt!).inMilliseconds < _faceCooldownMs) {
+      debugPrint('⏱️ Unknown alert skipped (cooldown)');
+      return;
     }
-
     _lastAlertAt = now;
 
-    // ✅ Build data map — location fields added but won't break if null
+    debugPrint('🚨 Saving unknown face alert...');
+    debugPrint('   GPS: ${latitude != null ? "$latitude, $longitude" : "none"}');
+    debugPrint('   Image: ${imagePath ?? "none"}');
+
+    // ✅ Upload image to Firebase Storage first
+    final imageUrl = await _uploadImage(imagePath, 'unknown_face');
+
     final data = <String, dynamic>{
       'type': 'unknown_face',
       'created_at': FieldValue.serverTimestamp(),
@@ -48,17 +74,19 @@ class AlertService {
       'threshold': threshold,
       'lens': lens,
       'note': note,
-      'image_path': imagePath,
-      'face_image_paths': faceImagePaths,
-      'has_image': imagePath != null,
-      'face_count': faceImagePaths?.length ?? 0,
+      'has_image': imageUrl != null,
     };
 
-    // ✅ Add location data only if available
+    // ✅ Save Firebase Storage URL (not local path)
+    if (imageUrl != null) {
+      data['image_url'] = imageUrl;
+    }
+
+    // ✅ Save GPS data
     if (latitude != null && longitude != null) {
       data['latitude'] = latitude;
       data['longitude'] = longitude;
-      data['place_name'] = placeName ?? 'Unknown location';
+      data['place_name'] = placeName ?? 'Unknown';
       data['address'] = address ?? '';
       data['has_location'] = true;
       data['geo_point'] = GeoPoint(latitude, longitude);
@@ -68,31 +96,27 @@ class AlertService {
 
     await _db.collection(_collection).add(data);
 
-    debugPrint('✅ Unknown face alert saved'
-        '${imagePath != null ? ' with image' : ''}'
-        '${latitude != null ? ' at $placeName' : ''}');
+    debugPrint('✅ Alert saved — GPS: ${latitude != null ? "YES ($placeName)" : "NO"}'
+        ' — Image: ${imageUrl != null ? "YES" : "NO"}');
   }
 
   Future<void> createGroupAlert({
     required int personCount,
     required String lens,
     String? imagePath,
-    // ✅ NEW: location fields
     double? latitude,
     double? longitude,
     String? placeName,
     String? address,
   }) async {
     final now = DateTime.now();
-
-    if (_lastGroupAt != null) {
-      final diff = now.difference(_lastGroupAt!).inMilliseconds;
-      if (diff < _groupCooldownMs) return;
-    }
-
+    if (_lastGroupAt != null &&
+        now.difference(_lastGroupAt!).inMilliseconds < _groupCooldownMs) return;
     _lastGroupAt = now;
 
     try {
+      final imageUrl = await _uploadImage(imagePath, 'group_detected');
+
       final data = <String, dynamic>{
         'type': 'group_detected',
         'created_at': FieldValue.serverTimestamp(),
@@ -100,76 +124,63 @@ class AlertService {
         'person_count': personCount,
         'lens': lens,
         'note': 'Group of $personCount people detected',
-        'image_path': imagePath,
-        'has_image': imagePath != null,
+        'has_image': imageUrl != null,
+        if (imageUrl != null) 'image_url': imageUrl,
+        'has_location': latitude != null,
+        if (latitude != null) ...{
+          'latitude': latitude,
+          'longitude': longitude,
+          'place_name': placeName ?? 'Unknown',
+          'address': address ?? '',
+          'geo_point': GeoPoint(latitude, longitude!),
+        },
       };
 
-      if (latitude != null && longitude != null) {
-        data['latitude'] = latitude;
-        data['longitude'] = longitude;
-        data['place_name'] = placeName ?? 'Unknown location';
-        data['address'] = address ?? '';
-        data['has_location'] = true;
-        data['geo_point'] = GeoPoint(latitude, longitude);
-      } else {
-        data['has_location'] = false;
-      }
-
       await _db.collection(_collection).add(data);
-      debugPrint('✅ Group alert saved (count: $personCount)'
-          '${imagePath != null ? ' with image' : ''}'
-          '${latitude != null ? ' at $placeName' : ''}');
+      debugPrint('✅ Group alert saved ($personCount people)');
     } catch (e) {
-      debugPrint('❌ Failed to save group alert: $e');
+      debugPrint('❌ Group alert failed: $e');
     }
   }
 
   Future<void> createSmokingAlert({
     required String lens,
     String? imagePath,
-    // ✅ NEW: location fields
     double? latitude,
     double? longitude,
     String? placeName,
     String? address,
   }) async {
     final now = DateTime.now();
-
-    if (_lastSmokeAt != null) {
-      final diff = now.difference(_lastSmokeAt!).inMilliseconds;
-      if (diff < _smokeCooldownMs) return;
-    }
-
+    if (_lastSmokeAt != null &&
+        now.difference(_lastSmokeAt!).inMilliseconds < _smokeCooldownMs) return;
     _lastSmokeAt = now;
 
     try {
+      final imageUrl = await _uploadImage(imagePath, 'smoking_detected');
+
       final data = <String, dynamic>{
         'type': 'smoking_detected',
         'created_at': FieldValue.serverTimestamp(),
         'created_at_local': now.toIso8601String(),
         'lens': lens,
         'note': 'Smoking detected',
-        'image_path': imagePath,
-        'has_image': imagePath != null,
+        'has_image': imageUrl != null,
+        if (imageUrl != null) 'image_url': imageUrl,
+        'has_location': latitude != null,
+        if (latitude != null) ...{
+          'latitude': latitude,
+          'longitude': longitude,
+          'place_name': placeName ?? 'Unknown',
+          'address': address ?? '',
+          'geo_point': GeoPoint(latitude, longitude!),
+        },
       };
 
-      if (latitude != null && longitude != null) {
-        data['latitude'] = latitude;
-        data['longitude'] = longitude;
-        data['place_name'] = placeName ?? 'Unknown location';
-        data['address'] = address ?? '';
-        data['has_location'] = true;
-        data['geo_point'] = GeoPoint(latitude, longitude);
-      } else {
-        data['has_location'] = false;
-      }
-
       await _db.collection(_collection).add(data);
-      debugPrint('🚬 Smoking alert saved'
-          '${imagePath != null ? ' with image' : ''}'
-          '${latitude != null ? ' at $placeName' : ''}');
+      debugPrint('✅ Smoking alert saved');
     } catch (e) {
-      debugPrint('❌ Failed to save smoking alert: $e');
+      debugPrint('❌ Smoking alert failed: $e');
     }
   }
 
