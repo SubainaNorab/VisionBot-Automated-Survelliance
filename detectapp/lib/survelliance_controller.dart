@@ -1,4 +1,4 @@
-// surveillance_controller.dart - COMPLETE WITH PROPER CLEANUP & ERROR HANDLING
+// surveillance_controller.dart - OPTIMIZED FOR MOVING ROBOT & PERSON
 
 import 'dart:async';
 import 'dart:io';
@@ -59,7 +59,6 @@ class SurveillanceState {
 }
 
 class SurveillanceController {
-  // Services
   final CameraService _camera = CameraService();
   final FaceDetectionService _detector = FaceDetectionService();
   final FaceVerificationService _verifier = FaceVerificationService();
@@ -72,40 +71,34 @@ class SurveillanceController {
   
   SurveillanceState _state = const SurveillanceState();
 
-  // Face verification
   bool _autoVerify = true;
   Timer? _verifyTimer;
   Timer? _statusTimer;
   Timer? _cacheCleanupTimer;
 
-  // Alert state tracking
   bool _lastGroupState = false;
   bool _lastSmokeState = false;
 
   int _frameCount = 0;
   static const int _frameSkip = 5;
 
-  // Frame buffering flags
   bool _shouldVerifyNextCycle = false;
   bool _processingVerification = false;
 
-  // Face tracking cache
   final Map<String, DateTime> _recentlyVerified = {};
   final Duration _verificationCacheDuration = Duration(seconds: 30);
 
-  // Face verification tracking
   int _lastVerifiedFaceCount = 0;
   int _lastKnownCount = 0;
   int _lastUnknownCount = 0;
   DateTime _lastVerificationTime = DateTime.fromMillisecondsSinceEpoch(0);
 
-  // Distance filtering stats
   int _facesTooFar = 0;
   int _facesTooClose = 0;
 
-  // Image capture for alerts
-  String? _lastCapturedImagePath;
-  List<img.Image>? _lastDetectedFaces;
+  // ✅ NEW: Track last YOLO detection to trigger immediate capture
+  int _lastYoloPersonCount = 0;
+  DateTime _lastYoloDetectionTime = DateTime.now();
 
   Stream<SurveillanceState> get stateStream => _stateController.stream;
   SurveillanceState get currentState => _state;
@@ -113,7 +106,6 @@ class SurveillanceController {
   bool get autoVerify => _autoVerify;
   FaceDetectionService get faceDetector => _detector;
 
-  // ✅ Helper to check if controller is still active
   bool get mounted => !_stateController.isClosed;
 
   SurveillanceController({
@@ -150,7 +142,7 @@ class SurveillanceController {
 
       debugPrint('✅ SurveillanceController initialized');
       debugPrint('📁 Alert images path: ${_imageService.storagePath}');
-      debugPrint('📏 Distance range: ${_detector.minFaceWidth}-${_detector.maxFaceWidth}px (ideal: ${_detector.idealMinWidth}-${_detector.idealMaxWidth}px)');
+      debugPrint('📏 Distance range: ${_detector.minFaceWidth}-${_detector.maxFaceWidth}px');
     } catch (e) {
       _updateState(_state.copyWith(
         isBooting: false,
@@ -181,7 +173,6 @@ class SurveillanceController {
       if (!mounted) return;
 
       final det = _multi.lastResult;
-
       int yoloPeople = det.personCount;
       
       final timeSinceVerification = DateTime.now().difference(_lastVerificationTime);
@@ -190,7 +181,6 @@ class SurveillanceController {
       int totalPeople = yoloPeople;
       String peopleBreakdown = '';
       
-      // ✅ Combine YOLO + Face counts intelligently
       if (hasRecentVerification && _lastVerifiedFaceCount > 0) {
         totalPeople = max(yoloPeople, _lastVerifiedFaceCount);
         
@@ -255,51 +245,35 @@ class SurveillanceController {
     final lensName =
         _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
-    // Group alert with image
+    // ✅ Group alert - NO IMAGE SAVE HERE (will be saved during verification)
     if (isGroup && !_lastGroupState) {
       debugPrint('🚨 GROUP DETECTED: $totalPeople people$peopleBreakdown');
-      
-      String? savedImagePath;
-      if (_lastCapturedImagePath != null) {
-        final cleanInfo = peopleBreakdown.replaceAll(' ', '').replaceAll('(', '').replaceAll(')', '');
-        savedImagePath = await _imageService.saveGroupImage(
-          _lastCapturedImagePath!,
-          personCount: totalPeople,
-          additionalInfo: cleanInfo,
-        );
-      }
       
       _alertService
           .createGroupAlert(
             personCount: totalPeople,
             lens: lensName,
-            imagePath: savedImagePath,
+            imagePath: null, // Will be added during verification
           )
           .catchError((e) => debugPrint('❌ Group alert error: $e'));
     }
     _lastGroupState = isGroup;
 
-    // Smoking alert with image
+    // Smoking alert
     if (det.smokingDetected && !_lastSmokeState) {
       debugPrint('🚨 SMOKING DETECTED');
-      
-      String? savedImagePath;
-      if (_lastCapturedImagePath != null) {
-        savedImagePath = await _imageService.saveSmokingImage(
-          _lastCapturedImagePath!,
-        );
-      }
       
       _alertService
           .createSmokingAlert(
             lens: lensName,
-            imagePath: savedImagePath,
+            imagePath: null,
           )
           .catchError((e) => debugPrint('❌ Smoke alert error: $e'));
     }
     _lastSmokeState = det.smokingDetected;
   }
 
+  // ✅ UPDATED: Immediate capture when person detected
   void _onFrame(CameraImage image) {
     if (!_multi.isInitialized || !mounted) return;
 
@@ -310,16 +284,33 @@ class SurveillanceController {
     }
     
     final det = _multi.lastResult;
-    final hasPeople = det.personCount > 0;
+    final yoloPeople = det.personCount;
     
-    if (_frameCount % 90 == 0 && _autoVerify && !_processingVerification) {
-      if (hasPeople || _frameCount % 90 == 0) {
+    // ✅ NEW: Immediate verification when person first detected
+    if (yoloPeople > 0 && _lastYoloPersonCount == 0) {
+      // Person just appeared!
+      debugPrint('👤 NEW PERSON DETECTED - Triggering immediate capture');
+      _lastYoloDetectionTime = DateTime.now();
+      
+      if (_autoVerify && !_processingVerification) {
         _shouldVerifyNextCycle = true;
         _triggerBackgroundVerification();
       }
     }
+    
+    // ✅ Also verify periodically (every 3 seconds) if person still there
+    if (_frameCount % 90 == 0 && _autoVerify && !_processingVerification && yoloPeople > 0) {
+      final timeSinceLastDetection = DateTime.now().difference(_lastYoloDetectionTime);
+      if (timeSinceLastDetection.inSeconds > 2) {
+        _shouldVerifyNextCycle = true;
+        _triggerBackgroundVerification();
+      }
+    }
+    
+    _lastYoloPersonCount = yoloPeople;
   }
 
+  // ✅ UPDATED: Capture multiple frames and pick best
   Future<void> _triggerBackgroundVerification() async {
     if (_processingVerification || !_shouldVerifyNextCycle || !mounted) return;
     
@@ -331,98 +322,135 @@ class SurveillanceController {
       faceStatus: 'Quick verify...',
     ));
     
-    XFile? shot;
+    List<XFile> capturedFrames = [];
     
     try {
-      // Stop stream
       if (_camera.controller?.value.isStreamingImages ?? false) {
         await _camera.stopStream();
-        await Future.delayed(const Duration(milliseconds: 100));
-      }
-      
-      shot = await _camera.takePicture();
-      
-      _lastCapturedImagePath = shot.path;
-      
-      debugPrint('📸 Background: Photo captured, stream restarting...');
-      
-      // Restart stream BEFORE processing
-      if (mounted && _camera.isInitialized) {
-        unawaited(_camera.startStream(_onFrame));
         await Future.delayed(const Duration(milliseconds: 50));
       }
       
-      final faceInfos = await _detector.detectAndCropAllFacesWithDistance(shot.path);
+      // ✅ NEW: Capture 3 frames (for moving scenarios)
+      debugPrint('📸 Capturing 3 frames for best selection...');
+      for (int i = 0; i < 3; i++) {
+        capturedFrames.add(await _camera.takePicture());
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
       
-      debugPrint('📸 Background: Detected ${faceInfos.length} face(s)');
+      if (mounted && _camera.isInitialized) {
+        unawaited(_camera.startStream(_onFrame));
+      }
       
-      final validFaces = <img.Image>[];
-      _facesTooFar = 0;
-      _facesTooClose = 0;
+      // ✅ NEW: Pick best frame (most faces detected)
+      XFile? bestFrame;
+      int maxFaces = 0;
+      List<FaceInfo>? bestFaceInfos;
       
-      for (final faceInfo in faceInfos) {
-        if (faceInfo.isTooFar) {
-          _facesTooFar++;
-          debugPrint('⏭️ Skipping: Face too far (${faceInfo.originalWidth}px)');
-        } else if (faceInfo.isTooClose) {
-          _facesTooClose++;
-          debugPrint('⏭️ Skipping: Face too close (${faceInfo.originalWidth}px)');
-        } else if (faceInfo.isGoodDistance) {
-          validFaces.add(faceInfo.croppedFace);
-          debugPrint('✅ Face in good range: ${faceInfo.distanceStatus}');
+      for (final frame in capturedFrames) {
+        try {
+          final faceInfos = await _detector.detectAndCropAllFacesWithDistance(frame.path);
+          
+          if (faceInfos.length > maxFaces) {
+            maxFaces = faceInfos.length;
+            bestFrame = frame;
+            bestFaceInfos = faceInfos;
+          }
+        } catch (e) {
+          debugPrint('   Frame analysis failed: $e');
         }
       }
       
-      if (validFaces.isEmpty) {
-        String reason;
-        if (_facesTooFar > 0 && _facesTooClose > 0) {
-          reason = '$_facesTooFar too far, $_facesTooClose too close';
-        } else if (_facesTooFar > 0) {
-          reason = 'All $_facesTooFar face(s) too far';
-        } else if (_facesTooClose > 0) {
-          reason = 'All $_facesTooClose face(s) too close';
-        } else {
-          reason = 'No faces in valid range';
+      if (bestFrame == null || bestFaceInfos == null || bestFaceInfos.isEmpty) {
+        debugPrint('⚠️ No faces detected in any of the 3 frames');
+        
+        // Cleanup all frames
+        for (final frame in capturedFrames) {
+          try {
+            await File(frame.path).delete();
+          } catch (_) {}
         }
-        
-        if (mounted) {
-          _updateState(_state.copyWith(faceStatus: reason));
-        }
-        debugPrint('⚠️ Background verify: $reason');
-        
-        _scheduleImageCleanup(shot.path, Duration(seconds: 2));
-        
-        return;
-      }
-      
-      debugPrint('📸 Verifying ${validFaces.length} face(s) in good range');
-      
-      _lastDetectedFaces = validFaces;
-      
-      final results = _verifier.verifyMultipleFaces(validFaces);
-      
-      if (mounted) {
-        _processVerificationResults(results, validFaces.length, faceInfos.length);
-      }
-      
-      _scheduleImageCleanup(shot.path, Duration(seconds: 3));
-      
-    } catch (e) {
-      if (e.toString().contains('No face')) {
-        _lastVerifiedFaceCount = 0;
-        _lastKnownCount = 0;
-        _lastUnknownCount = 0;
-        _lastVerificationTime = DateTime.now();
         
         if (mounted) {
           _updateState(_state.copyWith(faceStatus: 'No faces detected'));
         }
-        debugPrint('⚠️ Background verify: No faces in frame');
-      } else {
-        debugPrint('⚠️ Background verification failed: $e');
-        if (mounted) {
-          _updateState(_state.copyWith(faceStatus: 'Verify error'));
+        return;
+      }
+      
+      debugPrint('✅ Best frame has ${bestFaceInfos.length} face(s)');
+      
+      // ✅ Cleanup other frames
+      for (final frame in capturedFrames) {
+        if (frame.path != bestFrame.path) {
+          try {
+            await File(frame.path).delete();
+          } catch (_) {}
         }
+      }
+      
+      // Process best frame
+      final validFaces = <img.Image>[];
+      _facesTooFar = 0;
+      _facesTooClose = 0;
+      
+      for (final faceInfo in bestFaceInfos) {
+        if (faceInfo.isTooFar) {
+          _facesTooFar++;
+        } else if (faceInfo.isTooClose) {
+          _facesTooClose++;
+        } else if (faceInfo.isGoodDistance) {
+          validFaces.add(faceInfo.croppedFace);
+        }
+      }
+      
+      if (validFaces.isEmpty) {
+        String reason = 'No faces in valid range';
+        if (_facesTooFar > 0) reason = '$_facesTooFar face(s) too far';
+        if (_facesTooClose > 0) reason = '$_facesTooClose face(s) too close';
+        
+        if (mounted) {
+          _updateState(_state.copyWith(faceStatus: reason));
+        }
+        
+        try {
+          await File(bestFrame.path).delete();
+        } catch (_) {}
+        
+        return;
+      }
+      
+      debugPrint('📸 Verifying ${validFaces.length} face(s)...');
+      
+      final results = _verifier.verifyMultipleFaces(validFaces);
+      
+      if (mounted) {
+        await _processVerificationResults(
+          results, 
+          validFaces.length, 
+          bestFaceInfos.length,
+          bestFrame.path, // ✅ Pass frame path for saving
+          validFaces, // ✅ Pass cropped faces
+        );
+      }
+      
+      // ✅ Cleanup after saving (if needed)
+      Future.delayed(Duration(seconds: 5), () {
+        try {
+          File(bestFrame!.path).delete();
+        } catch (_) {}
+      });
+      
+    } catch (e) {
+      debugPrint('⚠️ Verification failed: $e');
+      
+      // Cleanup all frames on error
+      for (final frame in capturedFrames) {
+        try {
+          await File(frame.path).delete();
+        } catch (_) {}
+      }
+      
+      if (mounted) {
+        _updateState(_state.copyWith(faceStatus: 'Verify error'));
       }
       
       try {
@@ -430,7 +458,7 @@ class SurveillanceController {
           await _camera.startStream(_onFrame);
         }
       } catch (e) {
-        debugPrint('❌ Failed to restart stream after error: $e');
+        debugPrint('❌ Failed to restart stream: $e');
       }
     } finally {
       if (mounted) {
@@ -440,32 +468,17 @@ class SurveillanceController {
     }
   }
 
-  // ✅ Schedule image cleanup
-  void _scheduleImageCleanup(String imagePath, Duration delay) {
-    Future.delayed(delay, () {
-      if (_lastCapturedImagePath == imagePath) {
-        try {
-          File(imagePath).delete();
-          _lastCapturedImagePath = null;
-          _lastDetectedFaces = null;
-        } catch (e) {
-          debugPrint('⚠️ Failed to delete temp image: $e');
-        }
-      }
-    });
-  }
-
-  void _processVerificationResults(
+  // ✅ UPDATED: Save frame immediately with results
+  Future<void> _processVerificationResults(
     List<VerificationResult> results,
     int verifiedFaceCount,
     int totalDetectedFaces,
-  ) {
+    String framePath, // ✅ NEW: Frame to save
+    List<img.Image> detectedFaces, // ✅ NEW: Cropped faces
+  ) async {
     int knownCount = 0;
     int unknownCount = 0;
     final knownNames = <String>[];
-    final newKnownNames = <String>[];
-
-    debugPrint('🔍 Processing ${results.length} verification results...');
 
     for (final result in results) {
       if (result.verified && result.person != null) {
@@ -475,10 +488,7 @@ class SurveillanceController {
         final isRecent = lastVerified != null && 
             DateTime.now().difference(lastVerified) < _verificationCacheDuration;
         
-        if (isRecent) {
-          debugPrint('⏭️ Skipping alert for $name (verified ${DateTime.now().difference(lastVerified!).inSeconds}s ago)');
-        } else {
-          newKnownNames.add(name);
+        if (!isRecent) {
           debugPrint('✅ NEW verification: $name');
         }
         
@@ -490,7 +500,6 @@ class SurveillanceController {
         }
       } else {
         unknownCount++;
-        debugPrint('❌ Unknown face detected');
       }
     }
 
@@ -499,47 +508,52 @@ class SurveillanceController {
     _lastUnknownCount = unknownCount;
     _lastVerificationTime = DateTime.now();
 
-    final filteredInfo = totalDetectedFaces > verifiedFaceCount
-        ? ' (${totalDetectedFaces - verifiedFaceCount} filtered by distance)'
-        : '';
+    debugPrint('📊 Verification: $verifiedFaceCount faces ($knownCount known, $unknownCount unknown)');
 
-    debugPrint('📊 Verification: ${verifiedFaceCount} faces verified$filteredInfo ($knownCount known, $unknownCount unknown)');
-
+    // ✅ SAVE FRAME IMMEDIATELY if unknown detected
     if (unknownCount > 0) {
       debugPrint('');
       debugPrint('═══════════════════════════════════');
-      debugPrint('🚨 UNKNOWN FACE(S) DETECTED');
+      debugPrint('🚨 UNKNOWN DETECTED - SAVING FRAME');
       debugPrint('═══════════════════════════════════');
-      debugPrint('   Unknown count: $unknownCount');
-      debugPrint('   Known count: $knownCount');
-      debugPrint('   Last captured image: $_lastCapturedImagePath');
       
-      if (_lastCapturedImagePath != null) {
-        final imgFile = File(_lastCapturedImagePath!);
-        debugPrint('   Image file exists: ${imgFile.existsSync()}');
-        if (imgFile.existsSync()) {
-          debugPrint('   Image file size: ${imgFile.lengthSync()} bytes');
-        }
-      } else {
-        debugPrint('   ❌ No captured image path!');
+      final lensName = _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
+      
+      // Save full frame
+      String? savedImagePath;
+      try {
+        savedImagePath = await _imageService.saveUnknownFaceImage(
+          framePath,
+          additionalInfo: 'unknown${unknownCount}_known${knownCount}',
+        );
+        debugPrint('✅ Full frame saved: $savedImagePath');
+      } catch (e) {
+        debugPrint('❌ Frame save failed: $e');
       }
       
-      debugPrint('   Last detected faces: ${_lastDetectedFaces?.length ?? 0}');
-      debugPrint('═══════════════════════════════════');
-      debugPrint('');
+      // Save cropped faces
+      List<String>? savedFacePaths;
+      try {
+        savedFacePaths = await _imageService.saveFaceImages(
+          detectedFaces,
+          alertType: 'unknown_face',
+          sessionInfo: 'u${unknownCount}_k${knownCount}',
+        );
+        debugPrint('✅ Saved ${savedFacePaths.length} cropped faces');
+      } catch (e) {
+        debugPrint('❌ Face save failed: $e');
+      }
       
-      final lensName = _camera.lensDirection == CameraLensDirection.front
-          ? 'front'
-          : 'back';
-
-      _saveUnknownFaceAlert(
-        unknownCount: unknownCount,
-        knownCount: knownCount,
+      // Create alert
+      await _alertService.createUnknownAlert(
+        threshold: FaceVerificationService.threshold,
         lens: lensName,
-        filteredInfo: filteredInfo,
+        note: '$unknownCount unknown face(s) detected',
+        imagePath: savedImagePath,
+        faceImagePaths: savedFacePaths,
       );
-    } else {
-      debugPrint('✅ All faces are known - no unknown face alert');
+      
+      debugPrint('═══════════════════════════════════');
     }
 
     String statusMsg;
@@ -556,96 +570,6 @@ class SurveillanceController {
         faceStatus: statusMsg,
         lastMatch: knownNames.isNotEmpty ? knownNames.join(', ') : 'Unknown',
       ));
-    }
-  }
-
-  Future<void> _saveUnknownFaceAlert({
-    required int unknownCount,
-    required int knownCount,
-    required String lens,
-    required String filteredInfo,
-  }) async {
-    debugPrint('');
-    debugPrint('═══════════════════════════════════');
-    debugPrint('📸 SAVING UNKNOWN FACE ALERT');
-    debugPrint('═══════════════════════════════════');
-    
-    try {
-      String? savedImagePath;
-      List<String>? savedFacePaths;
-
-      if (_lastCapturedImagePath != null) {
-        debugPrint('💾 Step 1: Saving full frame image...');
-        debugPrint('   Source: $_lastCapturedImagePath');
-        
-        final sourceFile = File(_lastCapturedImagePath!);
-        final exists = await sourceFile.exists();
-        debugPrint('   File exists: $exists');
-        
-        if (exists) {
-          final size = await sourceFile.length();
-          debugPrint('   File size: $size bytes');
-          
-          savedImagePath = await _imageService.saveUnknownFaceImage(
-            _lastCapturedImagePath!,
-            additionalInfo: 'unknown${unknownCount}_known${knownCount}',
-          );
-          
-          if (savedImagePath != null) {
-            debugPrint('   ✅ Full frame saved to: $savedImagePath');
-          } else {
-            debugPrint('   ❌ Full frame save returned null');
-          }
-        } else {
-          debugPrint('   ❌ Source file does not exist!');
-        }
-      } else {
-        debugPrint('⚠️ Step 1: No captured image path available');
-      }
-
-      if (_lastDetectedFaces != null && _lastDetectedFaces!.isNotEmpty) {
-        debugPrint('💾 Step 2: Saving ${_lastDetectedFaces!.length} cropped face images...');
-        
-        savedFacePaths = await _imageService.saveFaceImages(
-          _lastDetectedFaces!,
-          alertType: 'unknown_face',
-          sessionInfo: 'u${unknownCount}_k${knownCount}',
-        );
-        
-        debugPrint('   ✅ Saved ${savedFacePaths.length} face images');
-        for (int i = 0; i < savedFacePaths.length; i++) {
-          debugPrint('      Face ${i + 1}: ${savedFacePaths[i]}');
-        }
-      } else {
-        debugPrint('⚠️ Step 2: No detected faces available to save');
-        if (_lastDetectedFaces == null) {
-          debugPrint('      _lastDetectedFaces is null');
-        } else {
-          debugPrint('      _lastDetectedFaces is empty');
-        }
-      }
-
-      debugPrint('📝 Step 3: Creating Firestore alert...');
-      
-      await _alertService.createUnknownAlert(
-        threshold: FaceVerificationService.threshold,
-        lens: lens,
-        note: '$unknownCount unknown face(s) detected${knownCount > 0 ? ', $knownCount known' : ''}$filteredInfo',
-        imagePath: savedImagePath,
-        faceImagePaths: savedFacePaths,
-      );
-
-      debugPrint('✅ ALERT SAVED SUCCESSFULLY');
-      debugPrint('   Full frame: ${savedImagePath ?? 'none'}');
-      debugPrint('   Cropped faces: ${savedFacePaths?.length ?? 0}');
-      debugPrint('═══════════════════════════════════');
-      debugPrint('');
-    } catch (e, stackTrace) {
-      debugPrint('❌ FAILED TO SAVE UNKNOWN FACE ALERT');
-      debugPrint('   Error: $e');
-      debugPrint('   Stack trace: $stackTrace');
-      debugPrint('═══════════════════════════════════');
-      debugPrint('');
     }
   }
 
@@ -667,113 +591,11 @@ class SurveillanceController {
   }
 
   Future<void> verifyFace() async {
-    if (_processingVerification) {
-      debugPrint('⚠️ Verification already in progress');
-      return;
-    }
-
-    if (!mounted) return;
-
-    _processingVerification = true;
+    // Manual verification - same logic but immediate
+    if (_processingVerification || !mounted) return;
     
-    _updateState(_state.copyWith(
-      processingFace: true,
-      faceStatus: 'Capturing...',
-    ));
-
-    XFile? shot;
-
-    try {
-      if (_camera.controller?.value.isStreamingImages ?? false) {
-        await _camera.stopStream();
-        await Future.delayed(const Duration(milliseconds: 100));
-      }
-
-      shot = await _camera.takePicture();
-      _lastCapturedImagePath = shot.path;
-
-      if (!mounted) return;
-
-      _updateState(_state.copyWith(faceStatus: 'Detecting faces...'));
-      
-      final faceInfos = await _detector.detectAndCropAllFacesWithDistance(shot.path);
-      
-      debugPrint('📸 Manual: Detected ${faceInfos.length} face(s) in frame');
-
-      final validFaces = <img.Image>[];
-      _facesTooFar = 0;
-      _facesTooClose = 0;
-      
-      for (final faceInfo in faceInfos) {
-        if (faceInfo.isTooFar) {
-          _facesTooFar++;
-        } else if (faceInfo.isTooClose) {
-          _facesTooClose++;
-        } else if (faceInfo.isGoodDistance) {
-          validFaces.add(faceInfo.croppedFace);
-        }
-      }
-
-      if (validFaces.isEmpty) {
-        String reason;
-        if (_facesTooFar > 0 && _facesTooClose > 0) {
-          reason = '$_facesTooFar too far, $_facesTooClose too close - adjust distance';
-        } else if (_facesTooFar > 0) {
-          reason = 'All $_facesTooFar face(s) too far - move closer';
-        } else if (_facesTooClose > 0) {
-          reason = 'All $_facesTooClose face(s) too close - step back';
-        } else {
-          reason = 'No faces in valid range';
-        }
-        
-        if (mounted) {
-          _updateState(_state.copyWith(faceStatus: reason));
-        }
-        debugPrint('⚠️ Manual verify: $reason');
-        
-        _scheduleImageCleanup(shot.path, Duration(seconds: 1));
-        
-        return;
-      }
-
-      if (!mounted) return;
-
-      _updateState(_state.copyWith(
-        faceStatus: 'Verifying ${validFaces.length} face(s)...',
-      ));
-      
-      _lastDetectedFaces = validFaces;
-      final results = _verifier.verifyMultipleFaces(validFaces);
-
-      if (mounted) {
-        _processVerificationResults(results, validFaces.length, faceInfos.length);
-      }
-      
-      _scheduleImageCleanup(shot.path, Duration(seconds: 2));
-
-    } catch (e) {
-      final errorMsg = e.toString().contains('No face')
-          ? 'No faces detected'
-          : 'Error: $e';
-      
-      if (mounted) {
-        _updateState(_state.copyWith(faceStatus: errorMsg));
-      }
-      debugPrint('⚠️ Manual verification failed: $e');
-    } finally {
-      try {
-        if (mounted && _camera.isInitialized) {
-          await _camera.startStream(_onFrame);
-        }
-      } catch (e) {
-        debugPrint('⚠️ Failed to restart stream: $e');
-      }
-
-      if (mounted) {
-        _processingVerification = false;
-        _updateState(_state.copyWith(processingFace: false));
-      }
-    }
+    _shouldVerifyNextCycle = true;
+    await _triggerBackgroundVerification();
   }
 
   Future<void> switchCamera() async {
@@ -805,17 +627,14 @@ class SurveillanceController {
       _lastVerifiedFaceCount = 0;
       _lastKnownCount = 0;
       _lastUnknownCount = 0;
-      _facesTooFar = 0;
-      _facesTooClose = 0;
-      _lastCapturedImagePath = null;
-      _lastDetectedFaces = null;
+      _lastYoloPersonCount = 0;
 
       if (mounted) {
         _updateState(_state.copyWith(faceStatus: 'Ready'));
         _startAutoVerify();
       }
 
-      debugPrint('📷 Camera switched, all counters reset');
+      debugPrint('📷 Camera switched');
     } catch (e) {
       if (mounted) {
         _updateState(_state.copyWith(faceStatus: 'Switch failed: $e'));
@@ -826,7 +645,6 @@ class SurveillanceController {
 
   void setGroupThreshold(int threshold) {
     _multi.setGroupThreshold(threshold);
-    debugPrint('👥 Group threshold set to $threshold');
   }
 
   void _updateState(SurveillanceState newState) {
@@ -837,67 +655,30 @@ class SurveillanceController {
   }
 
   Future<void> dispose() async {
-    debugPrint('🧹 Starting SurveillanceController disposal...');
+    debugPrint('🧹 Disposing SurveillanceController...');
     
     _verifyTimer?.cancel();
     _statusTimer?.cancel();
     _cacheCleanupTimer?.cancel();
     
-    debugPrint('   Timers cancelled');
-    
     try {
       await _camera.stopStream();
-      debugPrint('   Camera stream stopped');
-    } catch (e) {
-      debugPrint('   ⚠️ Camera stream stop error: $e');
-    }
-    
-    try {
       await _camera.dispose();
-      debugPrint('   Camera disposed');
     } catch (e) {
-      debugPrint('   ⚠️ Camera dispose error: $e');
+      debugPrint('⚠️ Camera disposal error: $e');
     }
     
     try {
       await _detector.dispose();
-      debugPrint('   Face detector disposed');
-    } catch (e) {
-      debugPrint('   ⚠️ Face detector dispose error: $e');
-    }
-    
-    try {
       _verifier.dispose();
-      debugPrint('   Face verifier disposed');
-    } catch (e) {
-      debugPrint('   ⚠️ Face verifier dispose error: $e');
-    }
-    
-    try {
       _multi.dispose();
-      debugPrint('   Multi detector disposed');
-    } catch (e) {
-      debugPrint('   ⚠️ Multi detector dispose error: $e');
-    }
-    
-    try {
       await _stateController.close();
-      debugPrint('   State controller closed');
     } catch (e) {
-      debugPrint('   ⚠️ State controller close error: $e');
+      debugPrint('⚠️ Services disposal error: $e');
     }
     
     _recentlyVerified.clear();
     
-    if (_lastCapturedImagePath != null) {
-      try {
-        await File(_lastCapturedImagePath!).delete();
-        debugPrint('   Temp image cleaned up');
-      } catch (e) {
-        debugPrint('   ⚠️ Temp image cleanup error: $e');
-      }
-    }
-    
-    debugPrint('✅ SurveillanceController disposed successfully');
+    debugPrint('✅ SurveillanceController disposed');
   }
 }
