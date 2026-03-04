@@ -1,105 +1,163 @@
-// lib/services/alert_service.dart
-// KEY FIX: uploads images to Firebase Storage before saving URL to Firestore
-
-import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
-import 'package:flutter/foundation.dart';
+import 'dart:io';
+import 'dart:developer' as developer;
+import 'location_service.dart';
+
+class UnknownFaceAlert {
+  final String id;
+  final DateTime timestamp;
+  final String? imageUrl;
+  final LocationData? location;
+  final double confidence;
+  final String? description;
+  final bool isResolved;
+
+  UnknownFaceAlert({
+    this.id = '',
+    required this.timestamp,
+    this.imageUrl,
+    this.location,
+    required this.confidence,
+    this.description,
+    this.isResolved = false,
+  });
+
+  Map<String, dynamic> toFirestoreMap() => {
+    'timestamp': timestamp,
+    'imageUrl': imageUrl,
+    'location': location?.toMap(),
+    'address': location?.address ?? 'Unknown',
+    'latitude': location?.latitude ?? 0.0,
+    'longitude': location?.longitude ?? 0.0,
+    'accuracy': location?.accuracy ?? 0.0,
+    'confidence': confidence,
+    'description': description,
+    'isResolved': isResolved,
+    'createdAt': FieldValue.serverTimestamp(),
+  };
+
+  static UnknownFaceAlert fromFirestore(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>;
+
+    LocationData? location;
+    try {
+      final locMap = data['location'] as Map<String, dynamic>?;
+      if (locMap != null) {
+        location = LocationData(
+          latitude: (locMap['latitude'] as num?)?.toDouble() ?? 0,
+          longitude: (locMap['longitude'] as num?)?.toDouble() ?? 0,
+          accuracy: (locMap['accuracy'] as num?)?.toDouble() ?? 0,
+          altitude: (locMap['altitude'] as num?)?.toDouble() ?? 0,
+          timestamp: (locMap['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(),
+          heading: (locMap['heading'] as num?)?.toDouble() ?? 0,
+          speed: (locMap['speed'] as num?)?.toDouble() ?? 0,
+          address: data['address'] as String?,
+        );
+      }
+    } catch (e) {
+      developer.log('Parse error: $e');
+    }
+
+    return UnknownFaceAlert(
+      id: doc.id,
+      timestamp: (data['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      imageUrl: data['imageUrl'] as String?,
+      location: location,
+      confidence: (data['confidence'] as num?)?.toDouble() ?? 0,
+      description: data['description'] as String?,
+      isResolved: data['isResolved'] as bool? ?? false,
+    );
+  }
+}
 
 class AlertService {
-  static const String _collection = 'alerts';
+  static final AlertService _instance = AlertService._internal();
+  factory AlertService() => _instance;
+  AlertService._internal();
 
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
-  final FirebaseStorage _storage = FirebaseStorage.instance; // ✅ ADDED
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseStorage _storage = FirebaseStorage.instance;
 
-  DateTime? _lastAlertAt;
-  DateTime? _lastGroupAt;
-  DateTime? _lastSmokeAt;
+  static const String UNKNOWN_FACES_COLLECTION = 'unknown_faces';
+  static const String GROUP_ALERTS_COLLECTION = 'group_alerts';
+  static const String SMOKING_ALERTS_COLLECTION = 'smoking_alerts';
 
-  final int _faceCooldownMs = 2500;
-  final int _groupCooldownMs = 5000;
-  final int _smokeCooldownMs = 3000;
-
-  // ✅ FIX: uploads image to Storage and saves download URL (not local path)
-  Future<String?> _uploadImage(String? localPath, String folder) async {
-    if (localPath == null) return null;
-    final file = File(localPath);
-    if (!await file.exists()) {
-      debugPrint('⚠️ Image not found for upload: $localPath');
-      return null;
-    }
-    try {
-      final name = '${folder}_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final ref = _storage.ref().child('alerts/$folder/$name');
-      await ref.putFile(file, SettableMetadata(contentType: 'image/jpeg'));
-      final url = await ref.getDownloadURL();
-      debugPrint('📤 Image uploaded: $url');
-      return url;
-    } catch (e) {
-      debugPrint('❌ Image upload failed: $e');
-      return null;
-    }
-  }
-
+  // ✅ Create unknown face alert WITH location data
   Future<void> createUnknownAlert({
-    required double threshold,
-    required String lens,
-    String note = '',
     String? imagePath,
     List<String>? faceImagePaths,
+    required String note,
     double? latitude,
     double? longitude,
     String? placeName,
     String? address,
   }) async {
-    final now = DateTime.now();
-    if (_lastAlertAt != null &&
-        now.difference(_lastAlertAt!).inMilliseconds < _faceCooldownMs) {
-      debugPrint('⏱️ Unknown alert skipped (cooldown)');
-      return;
+    try {
+      developer.log('📝 Creating unknown face alert...');
+
+      String? imageUrl;
+      
+      // Upload image if provided
+      if (imagePath != null) {
+        File imageFile = File(imagePath);
+        if (await imageFile.exists()) {
+          developer.log('📤 Uploading image...');
+          String fileName = 'unknown_faces/${DateTime.now().millisecondsSinceEpoch}.jpg';
+          Reference ref = _storage.ref().child(fileName);
+
+          TaskSnapshot uploadTask = await ref.putFile(
+            imageFile,
+            SettableMetadata(
+              contentType: 'image/jpeg',
+              customMetadata: {
+                'timestamp': DateTime.now().toIso8601String(),
+                'type': 'unknown_face_alert',
+              },
+            ),
+          );
+
+          imageUrl = await uploadTask.ref.getDownloadURL();
+          developer.log('✅ Image uploaded: $imageUrl');
+        }
+      }
+
+      // Create Firestore document with location data
+      Map<String, dynamic> alertData = {
+        'timestamp': DateTime.now(),
+        'imageUrl': imageUrl,
+        'note': note,
+        'type': 'unknown_face',
+        'isResolved': false,
+        'createdAt': FieldValue.serverTimestamp(),
+        
+        // ✅ Location data fields
+        'latitude': latitude ?? 0.0,
+        'longitude': longitude ?? 0.0,
+        'placeName': placeName ?? 'Unknown',
+        'address': address ?? 'Unknown',
+        'hasLocation': latitude != null && longitude != null,
+      };
+
+      if (faceImagePaths != null && faceImagePaths.isNotEmpty) {
+        alertData['faceImagePaths'] = faceImagePaths;
+      }
+
+      DocumentReference docRef = 
+          await _firestore.collection(UNKNOWN_FACES_COLLECTION).add(alertData);
+
+      developer.log('✅ Alert saved to Firestore: ${docRef.id}');
+      developer.log('   Latitude: $latitude');
+      developer.log('   Longitude: $longitude');
+      developer.log('   Place: $placeName');
+      developer.log('   Address: $address');
+    } catch (e) {
+      developer.log('❌ Error creating unknown alert: $e');
+      rethrow;
     }
-    _lastAlertAt = now;
-
-    debugPrint('🚨 Saving unknown face alert...');
-    debugPrint('   GPS: ${latitude != null ? "$latitude, $longitude" : "none"}');
-    debugPrint('   Image: ${imagePath ?? "none"}');
-
-    // ✅ Upload image to Firebase Storage first
-    final imageUrl = await _uploadImage(imagePath, 'unknown_face');
-
-    final data = <String, dynamic>{
-      'type': 'unknown_face',
-      'created_at': FieldValue.serverTimestamp(),
-      'created_at_local': now.toIso8601String(),
-      'threshold': threshold,
-      'lens': lens,
-      'note': note,
-      'has_image': imageUrl != null,
-    };
-
-    // ✅ Save Firebase Storage URL (not local path)
-    if (imageUrl != null) {
-      data['image_url'] = imageUrl;
-    }
-
-    // ✅ Save GPS data
-    if (latitude != null && longitude != null) {
-      data['latitude'] = latitude;
-      data['longitude'] = longitude;
-      data['place_name'] = placeName ?? 'Unknown';
-      data['address'] = address ?? '';
-      data['has_location'] = true;
-      data['geo_point'] = GeoPoint(latitude, longitude);
-    } else {
-      data['has_location'] = false;
-    }
-
-    await _db.collection(_collection).add(data);
-
-    debugPrint('✅ Alert saved — GPS: ${latitude != null ? "YES ($placeName)" : "NO"}'
-        ' — Image: ${imageUrl != null ? "YES" : "NO"}');
   }
 
+  // ✅ Create group alert WITH location data
   Future<void> createGroupAlert({
     required int personCount,
     required String lens,
@@ -109,40 +167,65 @@ class AlertService {
     String? placeName,
     String? address,
   }) async {
-    final now = DateTime.now();
-    if (_lastGroupAt != null &&
-        now.difference(_lastGroupAt!).inMilliseconds < _groupCooldownMs) return;
-    _lastGroupAt = now;
-
     try {
-      final imageUrl = await _uploadImage(imagePath, 'group_detected');
+      developer.log('📝 Creating group alert...');
 
-      final data = <String, dynamic>{
-        'type': 'group_detected',
-        'created_at': FieldValue.serverTimestamp(),
-        'created_at_local': now.toIso8601String(),
-        'person_count': personCount,
+      String? imageUrl;
+
+      if (imagePath != null) {
+        File imageFile = File(imagePath);
+        if (await imageFile.exists()) {
+          developer.log('📤 Uploading group image...');
+          String fileName = 'group_alerts/${DateTime.now().millisecondsSinceEpoch}.jpg';
+          Reference ref = _storage.ref().child(fileName);
+
+          TaskSnapshot uploadTask = await ref.putFile(
+            imageFile,
+            SettableMetadata(
+              contentType: 'image/jpeg',
+              customMetadata: {
+                'timestamp': DateTime.now().toIso8601String(),
+                'type': 'group_alert',
+                'personCount': personCount.toString(),
+              },
+            ),
+          );
+
+          imageUrl = await uploadTask.ref.getDownloadURL();
+          developer.log('✅ Group image uploaded: $imageUrl');
+        }
+      }
+
+      Map<String, dynamic> alertData = {
+        'timestamp': DateTime.now(),
+        'type': 'group_detection',
+        'personCount': personCount,
         'lens': lens,
-        'note': 'Group of $personCount people detected',
-        'has_image': imageUrl != null,
-        if (imageUrl != null) 'image_url': imageUrl,
-        'has_location': latitude != null,
-        if (latitude != null) ...{
-          'latitude': latitude,
-          'longitude': longitude,
-          'place_name': placeName ?? 'Unknown',
-          'address': address ?? '',
-          'geo_point': GeoPoint(latitude, longitude!),
-        },
+        'imageUrl': imageUrl,
+        'isResolved': false,
+        'createdAt': FieldValue.serverTimestamp(),
+        
+        // ✅ Location data fields
+        'latitude': latitude ?? 0.0,
+        'longitude': longitude ?? 0.0,
+        'placeName': placeName ?? 'Unknown',
+        'address': address ?? 'Unknown',
+        'hasLocation': latitude != null && longitude != null,
       };
 
-      await _db.collection(_collection).add(data);
-      debugPrint('✅ Group alert saved ($personCount people)');
+      DocumentReference docRef =
+          await _firestore.collection(GROUP_ALERTS_COLLECTION).add(alertData);
+
+      developer.log('✅ Group alert saved: ${docRef.id}');
+      developer.log('   Person count: $personCount');
+      developer.log('   Location: $placeName');
     } catch (e) {
-      debugPrint('❌ Group alert failed: $e');
+      developer.log('❌ Error creating group alert: $e');
+      rethrow;
     }
   }
 
+  // ✅ Create smoking alert WITH location data
   Future<void> createSmokingAlert({
     required String lens,
     String? imagePath,
@@ -151,42 +234,136 @@ class AlertService {
     String? placeName,
     String? address,
   }) async {
-    final now = DateTime.now();
-    if (_lastSmokeAt != null &&
-        now.difference(_lastSmokeAt!).inMilliseconds < _smokeCooldownMs) return;
-    _lastSmokeAt = now;
-
     try {
-      final imageUrl = await _uploadImage(imagePath, 'smoking_detected');
+      developer.log('📝 Creating smoking alert...');
 
-      final data = <String, dynamic>{
-        'type': 'smoking_detected',
-        'created_at': FieldValue.serverTimestamp(),
-        'created_at_local': now.toIso8601String(),
+      String? imageUrl;
+
+      if (imagePath != null) {
+        File imageFile = File(imagePath);
+        if (await imageFile.exists()) {
+          developer.log('📤 Uploading smoking image...');
+          String fileName = 'smoking_alerts/${DateTime.now().millisecondsSinceEpoch}.jpg';
+          Reference ref = _storage.ref().child(fileName);
+
+          TaskSnapshot uploadTask = await ref.putFile(
+            imageFile,
+            SettableMetadata(
+              contentType: 'image/jpeg',
+              customMetadata: {
+                'timestamp': DateTime.now().toIso8601String(),
+                'type': 'smoking_alert',
+              },
+            ),
+          );
+
+          imageUrl = await uploadTask.ref.getDownloadURL();
+          developer.log('✅ Smoking image uploaded: $imageUrl');
+        }
+      }
+
+      Map<String, dynamic> alertData = {
+        'timestamp': DateTime.now(),
+        'type': 'smoking_detection',
         'lens': lens,
-        'note': 'Smoking detected',
-        'has_image': imageUrl != null,
-        if (imageUrl != null) 'image_url': imageUrl,
-        'has_location': latitude != null,
-        if (latitude != null) ...{
-          'latitude': latitude,
-          'longitude': longitude,
-          'place_name': placeName ?? 'Unknown',
-          'address': address ?? '',
-          'geo_point': GeoPoint(latitude, longitude!),
-        },
+        'imageUrl': imageUrl,
+        'isResolved': false,
+        'createdAt': FieldValue.serverTimestamp(),
+        
+        // ✅ Location data fields
+        'latitude': latitude ?? 0.0,
+        'longitude': longitude ?? 0.0,
+        'placeName': placeName ?? 'Unknown',
+        'address': address ?? 'Unknown',
+        'hasLocation': latitude != null && longitude != null,
       };
 
-      await _db.collection(_collection).add(data);
-      debugPrint('✅ Smoking alert saved');
+      DocumentReference docRef =
+          await _firestore.collection(SMOKING_ALERTS_COLLECTION).add(alertData);
+
+      developer.log('✅ Smoking alert saved: ${docRef.id}');
+      developer.log('   Location: $placeName');
     } catch (e) {
-      debugPrint('❌ Smoking alert failed: $e');
+      developer.log('❌ Error creating smoking alert: $e');
+      rethrow;
     }
   }
 
+  // Get unknown face alerts stream
+  Stream<List<UnknownFaceAlert>> getAlertsStream({bool onlyUnresolved = true}) {
+    Query query = _firestore
+        .collection(UNKNOWN_FACES_COLLECTION)
+        .orderBy('timestamp', descending: true);
+    
+    if (onlyUnresolved) {
+      query = query.where('isResolved', isEqualTo: false);
+    }
+    
+    return query.snapshots().map((snapshot) {
+      return snapshot.docs
+          .map((doc) => UnknownFaceAlert.fromFirestore(doc))
+          .toList();
+    });
+  }
+
+  // Mark alert as resolved
+  Future<void> markResolved(String alertId) async {
+    try {
+      await _firestore
+          .collection(UNKNOWN_FACES_COLLECTION)
+          .doc(alertId)
+          .update({'isResolved': true});
+      
+      developer.log('✅ Alert marked as resolved: $alertId');
+    } catch (e) {
+      developer.log('❌ Error marking alert as resolved: $e');
+      rethrow;
+    }
+  }
+
+  // Delete alert
+  Future<void> deleteAlert(String alertId) async {
+    try {
+      await _firestore
+          .collection(UNKNOWN_FACES_COLLECTION)
+          .doc(alertId)
+          .delete();
+      
+      developer.log('✅ Alert deleted: $alertId');
+    } catch (e) {
+      developer.log('❌ Error deleting alert: $e');
+      rethrow;
+    }
+  }
+
+  // Get group alerts stream
+  Stream<List<Map<String, dynamic>>> getGroupAlertsStream() {
+    return _firestore
+        .collection(GROUP_ALERTS_COLLECTION)
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs
+              .map((doc) => {...doc.data() as Map<String, dynamic>, 'id': doc.id})
+              .toList();
+        });
+  }
+
+  // Get smoking alerts stream
+  Stream<List<Map<String, dynamic>>> getSmokingAlertsStream() {
+    return _firestore
+        .collection(SMOKING_ALERTS_COLLECTION)
+        .orderBy('timestamp', descending: true)
+        .snapshots()
+        .map((snapshot) {
+          return snapshot.docs
+              .map((doc) => {...doc.data() as Map<String, dynamic>, 'id': doc.id})
+              .toList();
+        });
+  }
+
+  // Reset cooldowns (if needed)
   void resetCooldowns() {
-    _lastAlertAt = null;
-    _lastGroupAt = null;
-    _lastSmokeAt = null;
+    // Placeholder for any cooldown reset logic
   }
 }

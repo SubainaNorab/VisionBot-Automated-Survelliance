@@ -1,10 +1,5 @@
-// surveillance_controller.dart - UPDATED WITH GPS + NOTIFICATIONS
-// ⚠️ All existing face detection, alert flow, and Firebase logic preserved.
-// ✅ ADDED: Location fetching + push notifications on unknown face detection.
-
 import 'dart:async';
 import 'dart:io';
-import 'dart:math';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
@@ -15,7 +10,7 @@ import '../face_verification.dart';
 import '../services/alert_service.dart';
 import '../alert_image_service.dart';
 import '../sm_grp.dart';
-// ✅ NEW imports
+// ✅ Location and Notification services
 import '../services/location_service.dart';
 import '../services/notification_service.dart';
 
@@ -64,16 +59,17 @@ class SurveillanceState {
 }
 
 class SurveillanceController {
-  // Services
+  // ===== CORE SERVICES =====
   final CameraService _camera = CameraService();
   final FaceDetectionService _detector = FaceDetectionService();
   final FaceVerificationService _verifier = FaceVerificationService();
   final AlertService _alertService = AlertService();
   final AlertImageService _imageService = AlertImageService();
   final MultiDetectorService _multi;
-  // ✅ NEW: location and notification services
-  final LocationService _locationService = LocationService.instance;
-  final NotificationService _notificationService = NotificationService.instance;
+
+  // ===== NEW SERVICES: Location & Notifications =====
+  final LocationService _locationService = LocationService();
+  final NotificationService _notificationService = NotificationService();
 
   final StreamController<SurveillanceState> _stateController =
       StreamController<SurveillanceState>.broadcast();
@@ -127,6 +123,7 @@ class SurveillanceController {
     int groupThreshold = 1,
   }) : _multi = MultiDetectorService(groupThreshold: groupThreshold);
 
+  /// Initialize all services including location and notifications
   Future<void> initialize({
     CameraLensDirection preferredLens = CameraLensDirection.front,
   }) async {
@@ -136,19 +133,25 @@ class SurveillanceController {
     ));
 
     try {
-      // ✅ Initialize all services — location & notification added alongside existing ones
+      debugPrint('📱 Initializing SurveillanceController...');
+
+      // Initialize all services in parallel
       await Future.wait([
         _verifier.initialize(),
         _multi.initialize(),
         _camera.initialize(preferred: preferredLens),
         _imageService.initialize(),
-        _locationService.initialize(), // ✅ NEW
-        _notificationService.initialize(), // ✅ NEW
+        _locationService.initialize(), // ✅ NEW: Location service
+        _notificationService.initialize(), // ✅ NEW: Notification service
       ]);
 
-      // ✅ Pre-fetch location so first alert is fast
+      debugPrint('✅ All services initialized');
+
+      // Pre-fetch location for first alert (faster response)
+      debugPrint('📍 Pre-fetching GPS location...');
       unawaited(_locationService.getCurrentLocation());
 
+      // Start camera stream
       await _camera.startStream(_onFrame);
 
       _startStatusPolling();
@@ -165,6 +168,8 @@ class SurveillanceController {
       debugPrint('📁 Alert images path: ${_imageService.storagePath}');
       debugPrint(
           '📏 Distance range: ${_detector.minFaceWidth}-${_detector.maxFaceWidth}px');
+      debugPrint('📍 Location service initialized');
+      debugPrint('🔔 Notification service initialized');
     } catch (e) {
       _updateState(_state.copyWith(
         isBooting: false,
@@ -186,16 +191,16 @@ class SurveillanceController {
       idealMin: idealMin,
       idealMax: idealMax,
     );
-    debugPrint('📏 Controller distance thresholds updated');
+    debugPrint('📏 Distance thresholds updated');
   }
 
+  /// Status polling - updates UI with detection status
   void _startStatusPolling() {
     _statusTimer?.cancel();
     _statusTimer = Timer.periodic(const Duration(milliseconds: 300), (_) {
       if (!mounted) return;
 
       final det = _multi.lastResult;
-
       int yoloPeople = det.personCount;
 
       final timeSinceVerification =
@@ -259,6 +264,7 @@ class SurveillanceController {
     }
   }
 
+  /// Handle group and smoking detection alerts with location
   void _handleDetectionAlerts(
     DetectionResult det,
     int totalPeople,
@@ -270,7 +276,7 @@ class SurveillanceController {
     final lensName =
         _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
-    // ✅ Group alert — now fetches location
+    // ===== GROUP ALERT with Location =====
     if (isGroup && !_lastGroupState) {
       debugPrint('🚨 GROUP DETECTED: $totalPeople people$peopleBreakdown');
 
@@ -287,10 +293,10 @@ class SurveillanceController {
         );
       }
 
-      // ✅ Fetch location for group alert
-      final location =
-          await _locationService.getLocationFast(maxAgeSeconds: 60);
+      // ✅ Get location for group alert
+      final location = await _locationService.getCurrentLocation();
 
+      // Save to Firestore with location
       _alertService
           .createGroupAlert(
             personCount: totalPeople,
@@ -303,7 +309,7 @@ class SurveillanceController {
           )
           .catchError((e) => debugPrint('❌ Group alert error: $e'));
 
-      // ✅ Send notification for group
+      // ✅ Send notification with location
       if (location != null) {
         unawaited(_notificationService.sendGroupNotification(
           personCount: totalPeople,
@@ -312,11 +318,15 @@ class SurveillanceController {
           placeName: location.placeName,
           timestamp: DateTime.now().toIso8601String(),
         ));
+        debugPrint(
+            '🔔 Group notification sent: $totalPeople at ${location.placeName}');
+      } else {
+        debugPrint('⚠️ Group alert created but location unavailable');
       }
     }
     _lastGroupState = isGroup;
 
-    // ✅ Smoking alert — now fetches location
+    // ===== SMOKING ALERT with Location =====
     if (det.smokingDetected && !_lastSmokeState) {
       debugPrint('🚨 SMOKING DETECTED');
 
@@ -327,10 +337,10 @@ class SurveillanceController {
         );
       }
 
-      // ✅ Fetch location for smoking alert
-      final location =
-          await _locationService.getLocationFast(maxAgeSeconds: 60);
+      // ✅ Get location for smoking alert
+      final location = await _locationService.getCurrentLocation();
 
+      // Save to Firestore with location
       _alertService
           .createSmokingAlert(
             lens: lensName,
@@ -342,7 +352,7 @@ class SurveillanceController {
           )
           .catchError((e) => debugPrint('❌ Smoke alert error: $e'));
 
-      // ✅ Send notification for smoking
+      // ✅ Send notification with location
       if (location != null) {
         unawaited(_notificationService.sendSmokingNotification(
           latitude: location.latitude,
@@ -350,6 +360,9 @@ class SurveillanceController {
           placeName: location.placeName,
           timestamp: DateTime.now().toIso8601String(),
         ));
+        debugPrint('🔔 Smoking notification sent at ${location.placeName}');
+      } else {
+        debugPrint('⚠️ Smoking alert created but location unavailable');
       }
     }
     _lastSmokeState = det.smokingDetected;
@@ -397,7 +410,7 @@ class SurveillanceController {
       shot = await _camera.takePicture();
       _lastCapturedImagePath = shot.path;
 
-      debugPrint('📸 Background: Photo captured, stream restarting...');
+      debugPrint('📸 Background: Photo captured');
 
       if (mounted && _camera.isInitialized) {
         unawaited(_camera.startStream(_onFrame));
@@ -407,7 +420,7 @@ class SurveillanceController {
       final faceInfos =
           await _detector.detectAndCropAllFacesWithDistance(shot.path);
 
-      debugPrint('📸 Background: Detected ${faceInfos.length} face(s)');
+      debugPrint('📸 Detected ${faceInfos.length} face(s)');
 
       final validFaces = <img.Image>[];
       _facesTooFar = 0;
@@ -416,14 +429,11 @@ class SurveillanceController {
       for (final faceInfo in faceInfos) {
         if (faceInfo.isTooFar) {
           _facesTooFar++;
-          debugPrint('⏭️ Skipping: Face too far (${faceInfo.originalWidth}px)');
         } else if (faceInfo.isTooClose) {
           _facesTooClose++;
-          debugPrint(
-              '⏭️ Skipping: Face too close (${faceInfo.originalWidth}px)');
         } else if (faceInfo.isGoodDistance) {
           validFaces.add(faceInfo.croppedFace);
-          debugPrint('✅ Face in good range: ${faceInfo.distanceStatus}');
+          debugPrint('✅ Face in range: ${faceInfo.distanceStatus}');
         }
       }
 
@@ -447,7 +457,7 @@ class SurveillanceController {
         return;
       }
 
-      debugPrint('📸 Verifying ${validFaces.length} face(s) in good range');
+      debugPrint('📸 Verifying ${validFaces.length} face(s)');
 
       _lastDetectedFaces = validFaces;
 
@@ -483,7 +493,7 @@ class SurveillanceController {
           await _camera.startStream(_onFrame);
         }
       } catch (e) {
-        debugPrint('❌ Failed to restart stream after error: $e');
+        debugPrint('❌ Failed to restart stream: $e');
       }
     } finally {
       if (mounted) {
@@ -516,7 +526,7 @@ class SurveillanceController {
     int unknownCount = 0;
     final knownNames = <String>[];
 
-    debugPrint('🔍 Processing ${results.length} verification results...');
+    debugPrint('🔍 Processing ${results.length} results');
 
     for (final result in results) {
       if (result.verified && result.person != null) {
@@ -528,7 +538,7 @@ class SurveillanceController {
                 _verificationCacheDuration;
 
         if (!isRecent) {
-          debugPrint('✅ NEW verification: $name');
+          debugPrint('✅ NEW: $name');
         }
 
         _recentlyVerified[name] = DateTime.now();
@@ -538,7 +548,7 @@ class SurveillanceController {
         }
       } else {
         unknownCount++;
-        debugPrint('❌ Unknown face detected');
+        debugPrint('❌ Unknown face');
       }
     }
 
@@ -548,7 +558,7 @@ class SurveillanceController {
     _lastVerificationTime = DateTime.now();
 
     final filteredInfo = totalDetectedFaces > verifiedFaceCount
-        ? ' (${totalDetectedFaces - verifiedFaceCount} filtered by distance)'
+        ? ' (${totalDetectedFaces - verifiedFaceCount} filtered)'
         : '';
 
     if (unknownCount > 0) {
@@ -567,7 +577,7 @@ class SurveillanceController {
         filteredInfo: filteredInfo,
       );
     } else {
-      debugPrint('✅ All faces are known - no unknown face alert');
+      debugPrint('✅ All faces known');
     }
 
     String statusMsg;
@@ -576,7 +586,7 @@ class SurveillanceController {
     } else if (knownCount > 0) {
       statusMsg = '✅ Verified: ${knownNames.join(", ")}';
     } else {
-      statusMsg = '⚠️ All unknown ($unknownCount face(s))';
+      statusMsg = '⚠️ All unknown ($unknownCount)';
     }
 
     if (mounted) {
@@ -587,6 +597,7 @@ class SurveillanceController {
     }
   }
 
+  /// Save unknown face alert with location and notification
   Future<void> _saveUnknownFaceAlert({
     required int unknownCount,
     required int knownCount,
@@ -602,71 +613,67 @@ class SurveillanceController {
       String? savedImagePath;
       List<String>? savedFacePaths;
 
-      // ✅ STEP 1: Fetch GPS location CONCURRENTLY with image saving
-      debugPrint('🌍 Step 0: Fetching GPS location...');
-      final location = await _locationService
-    .getLocationFast(maxAgeSeconds: 30)
-    .timeout(const Duration(seconds: 10), onTimeout: () {
-  debugPrint('⚠️ GPS timed out — alert will have no location');
-  return null;
-});
+      // ✅ STEP 1: Fetch GPS location (concurrent)
+      debugPrint('🌍 Step 1: Fetching GPS location...');
+      final locationFuture = _locationService
+          .getCurrentLocation()
+          .timeout(const Duration(seconds: 10), onTimeout: () {
+        debugPrint('⚠️ GPS timed out');
+        return null;
+      });
 
-      // STEP 1: Save full frame image (existing logic preserved)
+      // STEP 2: Save full frame image
       if (_lastCapturedImagePath != null) {
-        debugPrint('💾 Step 1: Saving full frame image...');
+        debugPrint('💾 Step 2: Saving full frame...');
         final sourceFile = File(_lastCapturedImagePath!);
-        final exists = await sourceFile.exists();
-
-        if (exists) {
+        if (await sourceFile.exists()) {
           savedImagePath = await _imageService.saveUnknownFaceImage(
             _lastCapturedImagePath!,
             additionalInfo: 'unknown${unknownCount}_known${knownCount}',
           );
-
-          debugPrint('   ✅ Full frame saved to: $savedImagePath');
+          debugPrint('   ✅ Saved: $savedImagePath');
         }
       }
 
-      // STEP 2: Save cropped face images (existing logic preserved)
+      // STEP 3: Save cropped faces
       if (_lastDetectedFaces != null && _lastDetectedFaces!.isNotEmpty) {
         debugPrint(
-            '💾 Step 2: Saving ${_lastDetectedFaces!.length} cropped face images...');
+            '💾 Step 3: Saving ${_lastDetectedFaces!.length} cropped faces...');
         savedFacePaths = await _imageService.saveFaceImages(
           _lastDetectedFaces!,
           alertType: 'unknown_face',
           sessionInfo: 'u${unknownCount}_k${knownCount}',
         );
-        debugPrint('   ✅ Saved ${savedFacePaths.length} face images');
+        debugPrint('   ✅ Saved ${savedFacePaths.length} faces');
       }
 
-      // ✅ STEP 3: Await location result
-      // final location = await locationFuture;
+      // ✅ STEP 4: Await location result
+      final location = await locationFuture;
       if (location != null) {
         debugPrint('   📍 Location: ${location.placeName}');
         debugPrint('   📍 Coords: ${location.latitude}, ${location.longitude}');
       } else {
-        debugPrint('   ⚠️ Location not available');
+        debugPrint('   ⚠️ Location unavailable');
       }
 
-      // STEP 4: Create Firestore alert with location (existing + new location fields)
-      debugPrint('📝 Step 4: Creating Firestore alert...');
+      // STEP 5: Create Firestore alert with location data
+      debugPrint('📝 Step 5: Creating Firestore alert...');
+      
+      // ✅ FIXED: Call createUnknownAlert with location parameters
       await _alertService.createUnknownAlert(
-        threshold: FaceVerificationService.threshold,
-        lens: lens,
-        note:
-            '$unknownCount unknown face(s) detected${knownCount > 0 ? ', $knownCount known' : ''}$filteredInfo'
-            '${location != null ? ' at ${location.placeName}' : ''}',
         imagePath: savedImagePath,
         faceImagePaths: savedFacePaths,
-        // ✅ NEW: pass location data
+        note: '$unknownCount unknown face(s) detected${knownCount > 0 ? ', $knownCount known' : ''}$filteredInfo'
+            '${location != null ? ' at ${location.placeName}' : ''}',
+        // ✅ Location data parameters
         latitude: location?.latitude,
         longitude: location?.longitude,
         placeName: location?.placeName,
         address: location?.address,
       );
 
-      // ✅ STEP 5: Send push notification with image + location
-      debugPrint('🔔 Step 5: Sending push notification...');
+      // ✅ STEP 6: Send push notification with location
+      debugPrint('🔔 Step 6: Sending notification...');
       if (location != null) {
         await _notificationService.sendUnknownFaceNotification(
           latitude: location.latitude,
@@ -676,8 +683,8 @@ class SurveillanceController {
           imagePath: savedImagePath,
           unknownCount: unknownCount,
         );
+        debugPrint('   ✅ Notification sent with location');
       } else {
-        // Send notification without location
         await _notificationService.sendUnknownFaceNotification(
           latitude: 0,
           longitude: 0,
@@ -686,18 +693,19 @@ class SurveillanceController {
           imagePath: savedImagePath,
           unknownCount: unknownCount,
         );
+        debugPrint('   ⚠️ Notification sent without location');
       }
 
-      debugPrint('✅ ALERT SAVED + NOTIFICATION SENT SUCCESSFULLY');
-      debugPrint('   Full frame: ${savedImagePath ?? 'none'}');
-      debugPrint('   Cropped faces: ${savedFacePaths?.length ?? 0}');
+      debugPrint('✅ ALERT SAVED + NOTIFICATION SENT');
+      debugPrint('   Frame: ${savedImagePath ?? 'none'}');
+      debugPrint('   Faces: ${savedFacePaths?.length ?? 0}');
       debugPrint('   Location: ${location?.placeName ?? 'unavailable'}');
       debugPrint('═══════════════════════════════════');
       debugPrint('');
     } catch (e, stackTrace) {
-      debugPrint('❌ FAILED TO SAVE UNKNOWN FACE ALERT');
+      debugPrint('❌ FAILED TO SAVE ALERT');
       debugPrint('   Error: $e');
-      debugPrint('   Stack trace: $stackTrace');
+      debugPrint('   Stack: $stackTrace');
       debugPrint('═══════════════════════════════════');
       debugPrint('');
     }
@@ -753,7 +761,7 @@ class SurveillanceController {
       final faceInfos =
           await _detector.detectAndCropAllFacesWithDistance(shot.path);
 
-      debugPrint('📸 Manual: Detected ${faceInfos.length} face(s) in frame');
+      debugPrint('📸 Detected ${faceInfos.length} face(s)');
 
       final validFaces = <img.Image>[];
       _facesTooFar = 0;
@@ -812,7 +820,7 @@ class SurveillanceController {
       if (mounted) {
         _updateState(_state.copyWith(faceStatus: errorMsg));
       }
-      debugPrint('⚠️ Manual verification failed: $e');
+      debugPrint('⚠️ Verification failed: $e');
     } finally {
       try {
         if (mounted && _camera.isInitialized) {
@@ -848,7 +856,6 @@ class SurveillanceController {
         await _camera.startStream(_onFrame);
       }
 
-      _alertService.resetCooldowns();
       _lastGroupState = false;
       _lastSmokeState = false;
       _recentlyVerified.clear();
@@ -868,7 +875,7 @@ class SurveillanceController {
         _startAutoVerify();
       }
 
-      debugPrint('📷 Camera switched, all counters reset');
+      debugPrint('📷 Camera switched');
     } catch (e) {
       if (mounted) {
         _updateState(_state.copyWith(faceStatus: 'Switch failed: $e'));
@@ -889,8 +896,9 @@ class SurveillanceController {
     }
   }
 
+  /// Dispose all resources
   Future<void> dispose() async {
-    debugPrint('🧹 Starting SurveillanceController disposal...');
+    debugPrint('🧹 Disposing SurveillanceController...');
 
     _verifyTimer?.cancel();
     _statusTimer?.cancel();
@@ -899,7 +907,7 @@ class SurveillanceController {
     try {
       await _camera.stopStream();
     } catch (e) {
-      debugPrint('   ⚠️ Camera stream stop error: $e');
+      debugPrint('   ⚠️ Camera stream error: $e');
     }
 
     try {
@@ -911,13 +919,13 @@ class SurveillanceController {
     try {
       await _detector.dispose();
     } catch (e) {
-      debugPrint('   ⚠️ Face detector dispose error: $e');
+      debugPrint('   ⚠️ Detector dispose error: $e');
     }
 
     try {
       _verifier.dispose();
     } catch (e) {
-      debugPrint('   ⚠️ Face verifier dispose error: $e');
+      debugPrint('   ⚠️ Verifier dispose error: $e');
     }
 
     try {
@@ -929,7 +937,7 @@ class SurveillanceController {
     try {
       await _stateController.close();
     } catch (e) {
-      debugPrint('   ⚠️ State controller close error: $e');
+      debugPrint('   ⚠️ State controller error: $e');
     }
 
     _recentlyVerified.clear();
@@ -942,6 +950,6 @@ class SurveillanceController {
       }
     }
 
-    debugPrint('✅ SurveillanceController disposed successfully');
+    debugPrint('✅ SurveillanceController disposed');
   }
 }

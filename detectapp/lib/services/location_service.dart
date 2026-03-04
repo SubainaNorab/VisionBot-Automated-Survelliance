@@ -1,152 +1,128 @@
-// lib/services/location_service.dart
-
-import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart' show placemarkFromCoordinates;
+import 'package:geocoding/geocoding.dart';
+import 'dart:developer' as developer;
 
 class LocationData {
   final double latitude;
   final double longitude;
-  final String placeName;
-  final String address;
+  final double accuracy;
+  final double altitude;
   final DateTime timestamp;
+  final double heading;
+  final double speed;
+  final String? address;
 
-  const LocationData({
+  LocationData({
     required this.latitude,
     required this.longitude,
-    required this.placeName,
-    required this.address,
+    required this.accuracy,
+    required this.altitude,
     required this.timestamp,
+    required this.heading,
+    required this.speed,
+    this.address,
   });
 
   Map<String, dynamic> toMap() => {
-        'latitude': latitude,
-        'longitude': longitude,
-        'place_name': placeName,
-        'address': address,
-        'timestamp': timestamp.toIso8601String(),
-      };
+    'latitude': latitude,
+    'longitude': longitude,
+    'accuracy': accuracy,
+    'altitude': altitude,
+    'timestamp': timestamp,
+    'heading': heading,
+    'speed': speed,
+    'address': address,
+  };
+
+  String getGoogleMapsUrl() => 'https://maps.google.com/?q=$latitude,$longitude';
 }
 
 class LocationService {
-  static LocationService? _instance;
-  LocationData? _lastKnownLocation;
+  static final LocationService _instance = LocationService._internal();
+  factory LocationService() => _instance;
+  LocationService._internal();
 
-  static LocationService get instance {
-    _instance ??= LocationService._();
-    return _instance!;
-  }
-
-  LocationService._();
-
-  LocationData? get lastKnownLocation => _lastKnownLocation;
-
-  // ✅ FIX 1: Returns Future<void> not Future<bool>
-  Future<void> initialize() async {
-    debugPrint('📍 LocationService: initializing...');
+  Future<bool> requestLocationPermission() async {
     try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        debugPrint('⚠️ GPS: location services are OFF');
-        return;
-      }
-
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
-
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        debugPrint('❌ GPS: permission denied');
-        return;
+      if (permission == LocationPermission.deniedForever) {
+        developer.log('Location permission denied forever');
+        return false;
       }
-
-      debugPrint('✅ GPS permission OK — doing warm-up...');
-
-      // Warm-up fetch so GPS has a fix before first alert
-      final pos = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 10),
-      );
-
-      _lastKnownLocation = LocationData(
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-        placeName: '${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}',
-        address: '',
-        timestamp: DateTime.now(),
-      );
-
-      debugPrint('✅ GPS warm-up: ${pos.latitude}, ${pos.longitude}');
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        developer.log('Location service disabled');
+        return false;
+      }
+      return true;
     } catch (e) {
-      debugPrint('⚠️ GPS warm-up failed: $e');
+      developer.log('Error: $e');
+      return false;
     }
   }
 
-  Future<LocationData?> getCurrentLocation() async {
+  Future<LocationData?> getCurrentLocationWithAddress() async {
     try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 8),
+      bool hasPermission = await requestLocationPermission();
+      if (!hasPermission) return null;
+
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.best,
+        timeLimit: const Duration(seconds: 10),
+      ).timeout(
+        const Duration(seconds: 15),
+        onTimeout: () async {
+          return await Geolocator.getLastKnownPosition() ??
+              Position(
+                latitude: 0, longitude: 0,
+                timestamp: DateTime.now(),
+                accuracy: 0, altitude: 0,
+                altitudeAccuracy: 0, heading: 0,
+                headingAccuracy: 0, speed: 0,
+                speedAccuracy: 0,
+              );
+        },
       );
 
-      String placeName =
-          '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}';
-      String address = placeName;
-
+      String? address;
       try {
-        final placemarks = await placemarkFromCoordinates(
+        List<Placemark> placemarks = await placemarkFromCoordinates(
           position.latitude,
           position.longitude,
-        ).timeout(const Duration(seconds: 5));
-
+        );
         if (placemarks.isNotEmpty) {
-          final place = placemarks.first;
-          final parts = <String>[
-            if (place.name?.isNotEmpty == true) place.name!,
-            if (place.subLocality?.isNotEmpty == true) place.subLocality!,
-            if (place.locality?.isNotEmpty == true) place.locality!,
-          ];
-          if (parts.isNotEmpty) placeName = parts.join(', ');
-
-          final addrParts = <String>[
-            if (place.street?.isNotEmpty == true) place.street!,
-            if (place.locality?.isNotEmpty == true) place.locality!,
-            if (place.administrativeArea?.isNotEmpty == true) place.administrativeArea!,
-            if (place.country?.isNotEmpty == true) place.country!,
-          ];
-          if (addrParts.isNotEmpty) address = addrParts.join(', ');
+          Placemark p = placemarks.first;
+          List<String> parts = [];
+          if (p.name?.isNotEmpty ?? false) parts.add(p.name!);
+          if (p.locality?.isNotEmpty ?? false) parts.add(p.locality!);
+          if (p.administrativeArea?.isNotEmpty ?? false) parts.add(p.administrativeArea!);
+          if (p.country?.isNotEmpty ?? false) parts.add(p.country!);
+          address = parts.join(', ');
         }
       } catch (e) {
-        debugPrint('⚠️ Geocoding failed, using coordinates: $e');
+        developer.log('Geocoding error: $e');
       }
 
-      final data = LocationData(
+      return LocationData(
         latitude: position.latitude,
         longitude: position.longitude,
-        placeName: placeName,
+        accuracy: position.accuracy,
+        altitude: position.altitude,
+        timestamp: position.timestamp ?? DateTime.now(),
+        heading: position.heading,
+        speed: position.speed,
         address: address,
-        timestamp: DateTime.now(),
       );
-
-      _lastKnownLocation = data;
-      debugPrint('✅ GPS: $placeName');
-      return data;
     } catch (e) {
-      debugPrint('❌ GPS fetch failed: $e — using cached: $_lastKnownLocation');
-      return _lastKnownLocation;
+      developer.log('Location error: $e');
+      return null;
     }
   }
 
-  Future<LocationData?> getLocationFast({int maxAgeSeconds = 30}) async {
-    if (_lastKnownLocation != null) {
-      final age = DateTime.now().difference(_lastKnownLocation!.timestamp).inSeconds;
-      if (age < maxAgeSeconds) {
-        debugPrint('📍 GPS: cached (${age}s old): ${_lastKnownLocation!.placeName}');
-        return _lastKnownLocation;
-      }
-    }
-    return getCurrentLocation();
+  static double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    return Geolocator.distanceBetween(lat1, lon1, lat2, lon2);
   }
 }

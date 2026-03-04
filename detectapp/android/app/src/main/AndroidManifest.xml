@@ -1,7 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- ✅ EXISTING permissions preserved -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    
+  
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-feature android:name="android.hardware.camera" android:required="true"/>
     <uses-permission android:name="android.permission.CAMERA"/>
 
@@ -14,19 +19,15 @@
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
 
-    <!-- ✅ NEW: Location permissions -->
+    
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <!-- Optional: Background location (only if robot runs in background) -->
-    <!-- <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" /> -->
+   
 
-    <!-- ✅ NEW: Internet (required for FCM and Firestore — likely already present) -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- ✅ NEW: Post notifications (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- ✅ NEW: Vibration for notifications -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
@@ -55,7 +56,7 @@
             </intent-filter>
         </activity>
 
-        <!-- ✅ NEW: FCM service for background notifications -->
+     
         <service
             android:name="com.google.firebase.messaging.FirebaseMessagingService"
             android:exported="false">
@@ -64,17 +65,16 @@
             </intent-filter>
         </service>
 
-        <!-- ✅ NEW: Default notification channel metadata -->
+       
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="visionbot_alerts" />
 
-        <!-- ✅ NEW: Default notification icon -->
+      
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
             android:resource="@mipmap/ic_launcher" />
 
-        <!-- ✅ NEW: Default notification color -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/notification_color" />
