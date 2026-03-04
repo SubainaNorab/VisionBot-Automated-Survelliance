@@ -1,32 +1,26 @@
 name: detectapp
-description: VisionBot Surveillance Application
+description: VisionBot Automated Surveillance
 publish_to: 'none'
 version: 1.0.0+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
-
 dependencies:
   flutter:
     sdk: flutter
-
-  cupertino_icons: ^1.0.8
-  camera: ^0.10.6
-  firebase_core: ^2.32.0
-  cloud_firestore: ^4.17.5
-  google_mlkit_face_detection: ^0.10.1
+  
+  camera: ^0.10.5
+  path_provider: ^2.1.1
+  google_mlkit_face_detection: ^0.10.0
+  image: ^4.0.17
+  
   tflite_flutter: ^0.11.0
-  image: ^4.3.0
-  path_provider: ^2.1.5
-  permission_handler: ^11.4.0
-  device_info_plus: ^10.1.2
-  geolocator: ^12.0.0
-  geocoding: ^2.1.1
-  firebase_messaging: ^14.9.4
-  flutter_local_notifications: ^17.2.4
-  firebase_storage: ^11.7.7
-  http: ^1.2.2
-  google_maps_flutter: ^2.14.2
+  cloud_firestore: ^4.13.6
+  firebase_core: ^2.24.2
+  permission_handler: ^11.0.1
+  device_info_plus: ^10.0.1  # ✅ NEW - For Android version detection
+  
+  cupertino_icons: ^1.0.2
 
 dev_dependencies:
   flutter_test:
@@ -35,7 +29,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-
+  
   assets:
     - assets/facenet.tflite
     - assets/yolov8n.tflite

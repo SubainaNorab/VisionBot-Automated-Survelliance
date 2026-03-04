@@ -1,4 +1,4 @@
-// surveillance_controller.dart - OPTIMIZED FOR MOVING ROBOT & PERSON
+// surveillance_controller.dart - OPTIMIZED WITH AUTO-VERIFY FIX
 
 import 'dart:async';
 import 'dart:io';
@@ -96,7 +96,7 @@ class SurveillanceController {
   int _facesTooFar = 0;
   int _facesTooClose = 0;
 
-  // ✅ NEW: Track last YOLO detection to trigger immediate capture
+  // ✅ YOLO tracking for immediate capture
   int _lastYoloPersonCount = 0;
   DateTime _lastYoloDetectionTime = DateTime.now();
 
@@ -121,6 +121,8 @@ class SurveillanceController {
     ));
 
     try {
+      debugPrint('📱 Initializing SurveillanceController...');
+
       await Future.wait([
         _verifier.initialize(),
         _multi.initialize(),
@@ -128,21 +130,25 @@ class SurveillanceController {
         _imageService.initialize(),
       ]);
 
+      debugPrint('✅ All services initialized');
+
+      // ✅ Start camera stream BEFORE updating state
       await _camera.startStream(_onFrame);
+      debugPrint('✅ Camera stream started');
 
       _startStatusPolling();
       _startCacheCleanup();
+      _startAutoVerify(); // ✅ Start BEFORE marking ready
 
       _updateState(_state.copyWith(
         isBooting: false,
-        faceStatus: 'Ready',
+        faceStatus: 'Ready - Auto-verify ON',
       ));
-
-      _startAutoVerify();
 
       debugPrint('✅ SurveillanceController initialized');
       debugPrint('📁 Alert images path: ${_imageService.storagePath}');
       debugPrint('📏 Distance range: ${_detector.minFaceWidth}-${_detector.maxFaceWidth}px');
+      debugPrint('🔄 Auto-verify: $_autoVerify');
     } catch (e) {
       _updateState(_state.copyWith(
         isBooting: false,
@@ -245,7 +251,6 @@ class SurveillanceController {
     final lensName =
         _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
-    // ✅ Group alert - NO IMAGE SAVE HERE (will be saved during verification)
     if (isGroup && !_lastGroupState) {
       debugPrint('🚨 GROUP DETECTED: $totalPeople people$peopleBreakdown');
       
@@ -253,13 +258,12 @@ class SurveillanceController {
           .createGroupAlert(
             personCount: totalPeople,
             lens: lensName,
-            imagePath: null, // Will be added during verification
+            imagePath: null,
           )
           .catchError((e) => debugPrint('❌ Group alert error: $e'));
     }
     _lastGroupState = isGroup;
 
-    // Smoking alert
     if (det.smokingDetected && !_lastSmokeState) {
       debugPrint('🚨 SMOKING DETECTED');
       
@@ -273,7 +277,7 @@ class SurveillanceController {
     _lastSmokeState = det.smokingDetected;
   }
 
-  // ✅ UPDATED: Immediate capture when person detected
+  // ✅ UPDATED: Immediate capture + periodic verification + debug logging
   void _onFrame(CameraImage image) {
     if (!_multi.isInitialized || !mounted) return;
 
@@ -286,24 +290,29 @@ class SurveillanceController {
     final det = _multi.lastResult;
     final yoloPeople = det.personCount;
     
-    // ✅ NEW: Immediate verification when person first detected
+    // ✅ Debug status every second
+    if (_frameCount % 30 == 0) {
+      debugPrint('📊 Frame $_frameCount: people=$yoloPeople, auto=$_autoVerify, busy=$_processingVerification');
+    }
+    
+    // ✅ TRIGGER 1: Immediate verification when person first detected
     if (yoloPeople > 0 && _lastYoloPersonCount == 0) {
-      // Person just appeared!
       debugPrint('👤 NEW PERSON DETECTED - Triggering immediate capture');
       _lastYoloDetectionTime = DateTime.now();
       
       if (_autoVerify && !_processingVerification) {
         _shouldVerifyNextCycle = true;
-        _triggerBackgroundVerification();
+        Future.microtask(() => _triggerBackgroundVerification());
       }
     }
     
-    // ✅ Also verify periodically (every 3 seconds) if person still there
+    // ✅ TRIGGER 2: Periodic check (every 3 seconds) if person still there
     if (_frameCount % 90 == 0 && _autoVerify && !_processingVerification && yoloPeople > 0) {
       final timeSinceLastDetection = DateTime.now().difference(_lastYoloDetectionTime);
       if (timeSinceLastDetection.inSeconds > 2) {
+        debugPrint('🔄 Periodic verification (people still present)');
         _shouldVerifyNextCycle = true;
-        _triggerBackgroundVerification();
+        Future.microtask(() => _triggerBackgroundVerification());
       }
     }
     
@@ -330,7 +339,7 @@ class SurveillanceController {
         await Future.delayed(const Duration(milliseconds: 50));
       }
       
-      // ✅ NEW: Capture 3 frames (for moving scenarios)
+      // ✅ Capture 3 frames
       debugPrint('📸 Capturing 3 frames for best selection...');
       for (int i = 0; i < 3; i++) {
         capturedFrames.add(await _camera.takePicture());
@@ -341,7 +350,7 @@ class SurveillanceController {
         unawaited(_camera.startStream(_onFrame));
       }
       
-      // ✅ NEW: Pick best frame (most faces detected)
+      // ✅ Pick best frame
       XFile? bestFrame;
       int maxFaces = 0;
       List<FaceInfo>? bestFaceInfos;
@@ -363,7 +372,6 @@ class SurveillanceController {
       if (bestFrame == null || bestFaceInfos == null || bestFaceInfos.isEmpty) {
         debugPrint('⚠️ No faces detected in any of the 3 frames');
         
-        // Cleanup all frames
         for (final frame in capturedFrames) {
           try {
             await File(frame.path).delete();
@@ -378,7 +386,7 @@ class SurveillanceController {
       
       debugPrint('✅ Best frame has ${bestFaceInfos.length} face(s)');
       
-      // ✅ Cleanup other frames
+      // Cleanup other frames
       for (final frame in capturedFrames) {
         if (frame.path != bestFrame.path) {
           try {
@@ -427,12 +435,12 @@ class SurveillanceController {
           results, 
           validFaces.length, 
           bestFaceInfos.length,
-          bestFrame.path, // ✅ Pass frame path for saving
-          validFaces, // ✅ Pass cropped faces
+          bestFrame.path,
+          validFaces,
         );
       }
       
-      // ✅ Cleanup after saving (if needed)
+      // Cleanup after 5 seconds
       Future.delayed(Duration(seconds: 5), () {
         try {
           File(bestFrame!.path).delete();
@@ -442,7 +450,6 @@ class SurveillanceController {
     } catch (e) {
       debugPrint('⚠️ Verification failed: $e');
       
-      // Cleanup all frames on error
       for (final frame in capturedFrames) {
         try {
           await File(frame.path).delete();
@@ -473,8 +480,8 @@ class SurveillanceController {
     List<VerificationResult> results,
     int verifiedFaceCount,
     int totalDetectedFaces,
-    String framePath, // ✅ NEW: Frame to save
-    List<img.Image> detectedFaces, // ✅ NEW: Cropped faces
+    String framePath,
+    List<img.Image> detectedFaces,
   ) async {
     int knownCount = 0;
     int unknownCount = 0;
@@ -573,13 +580,31 @@ class SurveillanceController {
     }
   }
 
+  // ��� UPDATED: Auto-verify with periodic forced verification
   void _startAutoVerify() {
     _verifyTimer?.cancel();
-    if (!_autoVerify) return;
+    
+    if (!_autoVerify) {
+      debugPrint('⏸️ Auto-verify disabled');
+      return;
+    }
+
+    debugPrint('▶️ Auto-verify started');
 
     _verifyTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       if (mounted) {
         _cleanVerificationCache();
+
+        // ✅ Force verification if people detected and no recent verification
+        final det = _multi.lastResult;
+        if (det.personCount > 0 && !_processingVerification) {
+          final timeSince = DateTime.now().difference(_lastVerificationTime);
+          if (timeSince.inSeconds > 15) {
+            debugPrint('⏰ Forced periodic verification (15s since last)');
+            _shouldVerifyNextCycle = true;
+            Future.microtask(() => _triggerBackgroundVerification());
+          }
+        }
       }
     });
   }
@@ -588,12 +613,18 @@ class SurveillanceController {
     _autoVerify = enabled;
     _startAutoVerify();
     debugPrint('🔄 Auto verify ${enabled ? "enabled" : "disabled"}');
+    
+    if (mounted) {
+      _updateState(_state.copyWith(
+        faceStatus: enabled ? 'Ready - Auto-verify ON' : 'Ready - Auto-verify OFF',
+      ));
+    }
   }
 
   Future<void> verifyFace() async {
-    // Manual verification - same logic but immediate
     if (_processingVerification || !mounted) return;
     
+    debugPrint('🔘 Manual verification triggered');
     _shouldVerifyNextCycle = true;
     await _triggerBackgroundVerification();
   }
