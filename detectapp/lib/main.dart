@@ -1,15 +1,44 @@
-// main.dart - WITH DETECTION SETTINGS
+// main.dart - FIXED UI WITH VISIBLE AUTO-VERIFY TOGGLE
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'firebase_options.dart';
 import 'survelliance_controller.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  
+  await _requestAllPermissions();
+  
   runApp(const VisionBot());
+}
+
+Future<void> _requestAllPermissions() async {
+  try {
+    debugPrint('🔐 Requesting all permissions...');
+    
+    Map<Permission, PermissionStatus> statuses = await [
+      Permission.camera,
+      Permission.storage,
+      Permission.photos,
+    ].request();
+    
+    debugPrint('📋 Permission results:');
+    statuses.forEach((permission, status) {
+      debugPrint('   ${permission.toString()}: $status');
+    });
+    
+    if (statuses[Permission.camera] != PermissionStatus.granted) {
+      debugPrint('⚠️ Camera permission not granted!');
+    }
+    
+  } catch (e) {
+    debugPrint('❌ Permission request failed: $e');
+  }
 }
 
 class VisionBot extends StatelessWidget {
@@ -36,18 +65,31 @@ class SurveillanceScreen extends StatefulWidget {
   State<SurveillanceScreen> createState() => _SurveillanceScreenState();
 }
 
-class _SurveillanceScreenState extends State<SurveillanceScreen> {
+class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBindingObserver {
   late final SurveillanceController _controller;
 
   @override
   void initState() {
     super.initState();
+    
+    WidgetsBinding.instance.addObserver(this);
+    
     _controller = SurveillanceController(groupThreshold: 1);
-    _controller.initialize();
+    
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _controller.initialize();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    debugPrint('📱 App lifecycle: $state');
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
     super.dispose();
   }
@@ -67,7 +109,6 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> {
             backgroundColor: Colors.black87,
             toolbarHeight: 48,
             actions: [
-              // ✅ Settings button
               IconButton(
                 onPressed: () => _showDetectionSettings(context),
                 icon: const Icon(Icons.settings, size: 20),
@@ -97,13 +138,50 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> {
                     Positioned.fill(child: _controller.camera.buildPreview()),
                     if (state.isBooting)
                       const Positioned.fill(
-                        child: Center(child: CircularProgressIndicator()),
+                        child: Center(
+                          child: CircularProgressIndicator(),
+                        ),
                       ),
                     // Live indicator
                     Positioned(
                       top: 8,
                       right: 8,
                       child: _LiveIndicator(),
+                    ),
+                    // ✅ ADDED: Auto-verify status overlay
+                    Positioned(
+                      top: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: _controller.autoVerify ? Colors.green : Colors.grey,
+                            width: 2,
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _controller.autoVerify ? Icons.check_circle : Icons.cancel,
+                              color: _controller.autoVerify ? Colors.green : Colors.grey,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Auto: ${_controller.autoVerify ? "ON" : "OFF"}',
+                              style: TextStyle(
+                                color: _controller.autoVerify ? Colors.green : Colors.grey,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -123,7 +201,6 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> {
     );
   }
 
-  // ✅ Detection settings dialog
   void _showDetectionSettings(BuildContext context) {
     showDialog(
       context: context,
@@ -135,38 +212,15 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Adjust detection distance for people:',
+                'Adjust detection distance:',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-              ),
-              const SizedBox(height: 16),
-              
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.blue.shade900.withOpacity(0.3),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Current Issue: Not detecting at 4-6 footsteps?',
-                      style: TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Try "Medium" or "Long" range settings',
-                      style: TextStyle(color: Colors.white70, fontSize: 11),
-                    ),
-                  ],
-                ),
               ),
               const SizedBox(height: 16),
               
               ListTile(
                 contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 title: const Text('Close Range (1-2m)', style: TextStyle(fontSize: 14)),
-                subtitle: const Text('Face: 100-400px | Hallways, doors', style: TextStyle(fontSize: 11)),
+                subtitle: const Text('Face: 100-400px', style: TextStyle(fontSize: 11)),
                 leading: const Icon(Icons.person, color: Colors.orange, size: 20),
                 onTap: () {
                   _controller.setDistanceThresholds(
@@ -176,7 +230,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> {
                     idealMax: 350,
                   );
                   Navigator.pop(context);
-                  _showSuccessSnackbar(context, '✅ Close range (1-2m)');
+                  _showSnackbar('✅ Close range (1-2m)');
                 },
               ),
               
@@ -187,21 +241,8 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> {
                 ),
                 child: ListTile(
                   contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  title: Row(
-                    children: [
-                      const Text('Medium Range (2-4m)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.green,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text('RECOMMENDED', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold)),
-                      ),
-                    ],
-                  ),
-                  subtitle: const Text('Face: 50-500px | 4-6 footsteps ✅', style: TextStyle(fontSize: 11)),
+                  title: const Text('Medium Range (2-4m)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                  subtitle: const Text('Face: 50-500px | RECOMMENDED', style: TextStyle(fontSize: 11, color: Colors.green)),
                   leading: const Icon(Icons.groups, color: Colors.green, size: 20),
                   onTap: () {
                     _controller.setDistanceThresholds(
@@ -211,7 +252,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> {
                       idealMax: 450,
                     );
                     Navigator.pop(context);
-                    _showSuccessSnackbar(context, '✅ Medium range (2-4m) - Best for 4-6 footsteps!');
+                    _showSnackbar('✅ Medium range (2-4m)');
                   },
                 ),
               ),
@@ -219,7 +260,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> {
               ListTile(
                 contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 title: const Text('Long Range (3-6m)', style: TextStyle(fontSize: 14)),
-                subtitle: const Text('Face: 30-600px | Large rooms, outdoors', style: TextStyle(fontSize: 11)),
+                subtitle: const Text('Face: 30-600px', style: TextStyle(fontSize: 11)),
                 leading: const Icon(Icons.visibility, color: Colors.blue, size: 20),
                 onTap: () {
                   _controller.setDistanceThresholds(
@@ -229,7 +270,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> {
                     idealMax: 550,
                   );
                   Navigator.pop(context);
-                  _showSuccessSnackbar(context, '✅ Long range (3-6m) - Maximum distance');
+                  _showSnackbar('✅ Long range (3-6m)');
                 },
               ),
             ],
@@ -245,7 +286,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> {
     );
   }
 
-  void _showSuccessSnackbar(BuildContext context, String message) {
+  void _showSnackbar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
@@ -307,6 +348,7 @@ class _CompactStatusPanel extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Face status
           Row(
             children: [
               Icon(Icons.face, color: Colors.blueAccent, size: 14),
@@ -323,39 +365,64 @@ class _CompactStatusPanel extends StatelessWidget {
           ),
           const SizedBox(height: 6),
 
+          // Detection status
           _CompactDetectionStatus(detectionStatus: state.detectionStatus),
           const SizedBox(height: 8),
 
+          // ✅ FIXED: Make toggle MORE VISIBLE
           Row(
             children: [
-              Transform.scale(
-                scale: 0.8,
-                child: Switch(
-                  value: autoVerify,
-                  onChanged: onAutoVerifyChanged,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              // Toggle with label
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: autoVerify ? Colors.green.withOpacity(0.2) : Colors.grey.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: autoVerify ? Colors.green : Colors.grey,
+                    width: 2,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 4),
-              const Expanded(
-                child: Text(
-                  'Auto verify',
-                  style: TextStyle(color: Colors.white70, fontSize: 11),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Transform.scale(
+                      scale: 1.0,  // ✅ Normal size (was 0.8)
+                      child: Switch(
+                        value: autoVerify,
+                        onChanged: onAutoVerifyChanged,
+                        activeColor: Colors.green,
+                        materialTapTargetSize: MaterialTapTargetSize.padded,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Auto Verify',
+                      style: TextStyle(
+                        color: autoVerify ? Colors.green : Colors.grey,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,  // ✅ Larger text
+                      ),
+                    ),
+                  ],
                 ),
               ),
               
+              const Spacer(),
+              
+              // Manual verify button
               SizedBox(
-                height: 32,
+                height: 40,  // ✅ Taller button
                 child: ElevatedButton.icon(
                   onPressed: state.processingFace ? null : onVerifyPressed,
-                  icon: const Icon(Icons.face, size: 14),
+                  icon: const Icon(Icons.face, size: 16),
                   label: Text(
-                    state.processingFace ? 'Processing' : 'Verify',
-                    style: TextStyle(fontSize: 11),
+                    state.processingFace ? 'Processing...' : 'Verify Now',
+                    style: TextStyle(fontSize: 12),
                   ),
                   style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    visualDensity: VisualDensity.comfortable,
                   ),
                 ),
               ),

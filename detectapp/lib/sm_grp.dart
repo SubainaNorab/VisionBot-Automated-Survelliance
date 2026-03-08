@@ -1,12 +1,13 @@
-// sm_grp.dart - OPTIMIZED WITH COMPUTE ISOLATE
+// sm_grp.dart - FIX YOLO DETECTION WITH AUTO-DETECT COORDINATE FORMAT
 
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'dart:math';
-import 'package:flutter/services.dart' show rootBundle;
+
 class DetectionResult {
   final bool smokingDetected;
   final bool groupDetected;
@@ -25,7 +26,6 @@ class DetectionResult {
       'Detection(people: $personCount, group: $groupDetected, smoke: $smokingDetected, ${processingTimeMs}ms)';
 }
 
-// ✅ Lightweight detection data class
 class _DetectionData {
   final Uint8List yPlane;
   final Uint8List uPlane;
@@ -76,19 +76,22 @@ class MultiDetectorService {
 
   Future<void> initialize() async {
     try {
-      debugPrint('🔧 MultiDetectorService: Loading YOLO only...');
+      debugPrint('🔧 MultiDetectorService: Loading YOLO...');
 
       final opt = InterpreterOptions()..threads = 2;
 
-      // ✅ Load YOLO only (skip smoking for now)
       try {
         _yolo = await Interpreter.fromAsset('assets/yolov8n.tflite', options: opt);
         
-        // Get model data for passing to compute
         final modelFile = await rootBundle.load('assets/yolov8n.tflite');
         _yoloModelData = modelFile.buffer.asUint8List();
         
+        // ✅ Log model input/output shape
+        final inputShape = _yolo!.getInputTensor(0).shape;
+        final outputShape = _yolo!.getOutputTensor(0).shape;
         debugPrint('✅ YOLO loaded (${_yoloModelData!.length} bytes)');
+        debugPrint('   Input shape: $inputShape');
+        debugPrint('   Output shape: $outputShape');
       } catch (e) {
         debugPrint('❌ YOLO load failed: $e');
         return;
@@ -97,33 +100,38 @@ class MultiDetectorService {
       _isInitialized = true;
 
       debugPrint('✅ MultiDetectorService ready (threshold: $groupThreshold)');
-    } catch (e, stackTrace) {
-      _isInitialized = false;
+    } catch (e) {
       debugPrint('❌ Init failed: $e');
-      debugPrint('Stack: $stackTrace');
     }
   }
 
   void setGroupThreshold(int threshold) {
     groupThreshold = threshold;
-    debugPrint('👥 Group threshold: $threshold');
   }
 
-  // ✅ SIMPLIFIED: Just count frames, don't process every frame
   int _frameCount = 0;
   
   void detectAllAsync(CameraImage image) {
-    if (!_isInitialized || _yoloModelData == null) return;
-    if (_busy) return;
+    if (!_isInitialized || _yoloModelData == null) {
+      if (_frameCount % 300 == 0) {
+        debugPrint('⚠️ Cannot detect: initialized=$_isInitialized, modelData=${_yoloModelData != null}');
+      }
+      return;
+    }
+    if (_busy) {
+      return;
+    }
 
     _frameCount++;
     
-    // ✅ Only process every 30 frames (1 per second)
-    if (_frameCount % 30 != 0) return;
+    if (_frameCount % 60 == 0) {
+      debugPrint('🎯 Frame $_frameCount - Starting YOLO detection');
+    }
+    
+    if (_frameCount % 60 != 0) return;
 
     _busy = true;
 
-    // Run in compute (lightweight isolate)
     compute(_runDetectionInCompute, _DetectionData(
       yPlane: image.planes[0].bytes,
       uPlane: image.planes[1].bytes,
@@ -136,10 +144,11 @@ class MultiDetectorService {
       yoloModelData: _yoloModelData!,
       groupThreshold: groupThreshold,
     )).then((result) {
+      debugPrint('✅ YOLO completed: $result');
       _last = result;
       _busy = false;
     }).catchError((e) {
-      debugPrint('⚠️ Detection error: $e');
+      debugPrint('❌ Detection error: $e');
       _busy = false;
     });
   }
@@ -151,17 +160,14 @@ class MultiDetectorService {
   }
 }
 
-// ✅ STATIC FUNCTION: Run in compute isolate
 Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
   final startTime = DateTime.now().millisecondsSinceEpoch;
 
   try {
-    // Load model in compute isolate
     final opt = InterpreterOptions()..threads = 1;
     final interpreter = Interpreter.fromBuffer(data.yoloModelData, options: opt);
 
-    // Prepare input (downsample to 320x320 for speed)
-    const int inputSize = 320; // ✅ Reduced from 640 for performance
+    const int inputSize = 640;
     
     final input = List.generate(
       1,
@@ -171,11 +177,11 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
       ),
     );
 
-    // Fill input from YUV
-    for (int y = 0; y < inputSize; y += 2) {
-      final srcY = (y * data.height / inputSize).floor();
-      for (int x = 0; x < inputSize; x += 2) {
-        final srcX = (x * data.width / inputSize).floor();
+    for (int y = 0; y < inputSize; y += 4) {
+      final srcY = (y * data.height ~/ inputSize).clamp(0, data.height - 1);
+      
+      for (int x = 0; x < inputSize; x += 4) {
+        final srcX = (x * data.width ~/ inputSize).clamp(0, data.width - 1);
 
         final yIndex = srcY * data.yRowStride + srcX;
         final uvIndex = (srcY ~/ 2) * data.uvRowStride + (srcX ~/ 2) * data.uvPixelStride;
@@ -192,8 +198,8 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
         final gNorm = g / 255.0;
         final bNorm = b / 255.0;
 
-        for (int dy = 0; dy < 2 && y + dy < inputSize; dy++) {
-          for (int dx = 0; dx < 2 && x + dx < inputSize; dx++) {
+        for (int dy = 0; dy < 4 && y + dy < inputSize; dy++) {
+          for (int dx = 0; dx < 4 && x + dx < inputSize; dx++) {
             input[0][y + dy][x + dx][0] = rNorm;
             input[0][y + dy][x + dx][1] = gNorm;
             input[0][y + dy][x + dx][2] = bNorm;
@@ -202,24 +208,18 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
       }
     }
 
-    // Run inference
     final output = List.generate(
       1,
-      (_) => List.generate(84, (_) => List.filled(2100, 0.0)), // ✅ 320x320 = 2100 anchors
+      (_) => List.generate(84, (_) => List.filled(8400, 0.0)),
     );
 
     interpreter.run(input, output);
     interpreter.close();
 
-    // Count persons
     int persons = _countPersons(output);
     bool groupDet = persons >= data.groupThreshold;
 
     final endTime = DateTime.now().millisecondsSinceEpoch;
-
-    if (persons > 0) {
-      debugPrint('🔍 Detection: people=$persons, group=$groupDet (${endTime - startTime}ms)');
-    }
 
     return DetectionResult(
       smokingDetected: false,
@@ -228,7 +228,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
       processingTimeMs: endTime - startTime,
     );
   } catch (e) {
-    debugPrint('⚠️ Compute detection error: $e');
+    debugPrint('⚠️ Compute error: $e');
     return DetectionResult(
       smokingDetected: false,
       groupDetected: false,
@@ -238,21 +238,94 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
   }
 }
 
+// ✅ FIXED: Auto-detect coordinate format + detailed debug
 int _countPersons(List output) {
   final preds = output[0] as List<List<double>>;
-  final boxes = <_Box>[];
 
-  for (int i = 0; i < 2100; i++) {
+  const int inputSize = 640;
+
+  // ✅ STEP 1: Find the best person score and check raw values
+  double maxPersonScore = 0.0;
+  int bestIdx = -1;
+  
+  // ✅ Also check ALL 80 COCO classes (not just index 4)
+  // YOLOv8 output: [x, y, w, h, class0, class1, ..., class79]
+  // class0 = person
+  double maxAnyClassScore = 0.0;
+  int maxClassIdx = -1;
+  
+  for (int i = 0; i < 8400; i++) {
+    // Person is class 0, so it's at index 4
     final personScore = preds[4][i];
-    if (personScore < 0.3) continue; // ✅ Slightly higher threshold
+    if (personScore > maxPersonScore) {
+      maxPersonScore = personScore;
+      bestIdx = i;
+    }
+    
+    // Check all classes
+    for (int c = 4; c < 84; c++) {
+      if (preds[c][i] > maxAnyClassScore) {
+        maxAnyClassScore = preds[c][i];
+        maxClassIdx = c - 4;
+      }
+    }
+  }
 
-    final cx = preds[0][i];
-    final cy = preds[1][i];
-    final bw = preds[2][i];
-    final bh = preds[3][i];
+  // ✅ STEP 2: Log raw values for debugging
+  debugPrint('🔍 YOLO Raw Output Analysis:');
+  debugPrint('   Max person (class 0) score: ${maxPersonScore.toStringAsFixed(4)}');
+  debugPrint('   Max ANY class score: ${maxAnyClassScore.toStringAsFixed(4)} (class $maxClassIdx)');
+  
+  if (bestIdx >= 0) {
+    final rawCx = preds[0][bestIdx];
+    final rawCy = preds[1][bestIdx];
+    final rawBw = preds[2][bestIdx];
+    final rawBh = preds[3][bestIdx];
+    debugPrint('   Best person raw bbox: cx=${rawCx.toStringAsFixed(4)}, cy=${rawCy.toStringAsFixed(4)}, w=${rawBw.toStringAsFixed(4)}, h=${rawBh.toStringAsFixed(4)}');
+    debugPrint('   Score: ${maxPersonScore.toStringAsFixed(4)}');
+    
+    // ✅ Auto-detect format
+    if (rawCx <= 1.5 && rawCy <= 1.5 && rawBw <= 1.5 && rawBh <= 1.5) {
+      debugPrint('   📐 Format: NORMALIZED (0-1) → scaling by $inputSize');
+    } else {
+      debugPrint('   📐 Format: PIXEL coordinates (0-$inputSize)');
+    }
+  }
+  
+  // ✅ STEP 3: Count persons with auto-scaling
+  final boxes = <_Box>[];
+  int candidateCount = 0;
+  int filteredSmall = 0;
 
-    if (bh < 40) continue;
-    if ((bw * bh) < 1600) continue;
+  for (int i = 0; i < 8400; i++) {
+    final personScore = preds[4][i];
+    
+    if (personScore < 0.25) continue; // ✅ Lowered from 0.30 to 0.25
+    
+    candidateCount++;
+
+    double cx = preds[0][i];
+    double cy = preds[1][i];
+    double bw = preds[2][i];
+    double bh = preds[3][i];
+
+    // ✅ Auto-detect: if values < 2.0, they are normalized (0-1)
+    if (cx < 2.0 && cy < 2.0 && bw < 2.0 && bh < 2.0) {
+      cx *= inputSize;
+      cy *= inputSize;
+      bw *= inputSize;
+      bh *= inputSize;
+    }
+
+    // Log first 3 candidates
+    if (candidateCount <= 3) {
+      debugPrint('   Candidate $candidateCount: score=${personScore.toStringAsFixed(3)}, pos=(${cx.toStringAsFixed(1)},${cy.toStringAsFixed(1)}), size=${bw.toStringAsFixed(1)}x${bh.toStringAsFixed(1)}');
+    }
+
+    if (bh < 40 || bw < 20) { // ✅ Lowered minimum size
+      filteredSmall++;
+      continue;
+    }
 
     boxes.add(_Box(
       cx - bw / 2,
@@ -263,7 +336,17 @@ int _countPersons(List output) {
     ));
   }
 
-  return _nms(boxes, 0.45);
+  debugPrint('   Candidates (>0.25): $candidateCount, filtered small: $filteredSmall, kept: ${boxes.length}');
+
+  final count = _nms(boxes, 0.45);
+  
+  if (count > 0) {
+    debugPrint('   🎯 DETECTED $count PERSON(S)!');
+  } else {
+    debugPrint('   ❌ No persons after NMS');
+  }
+  
+  return count;
 }
 
 int _nms(List<_Box> boxes, double iouThr) {
