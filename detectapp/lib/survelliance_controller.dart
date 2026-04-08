@@ -1,4 +1,4 @@
-// surveillance_controller.dart - CONTINUOUS VERIFICATION ON EVERY CAPTURE
+// surveillance_controller.dart - FIXED: Group detection + UI freeze issues
 
 import 'dart:async';
 import 'dart:io';
@@ -86,7 +86,8 @@ class SurveillanceController {
   final Map<String, DateTime> _recentlyVerified = {};
   final Duration _verificationCacheDuration = Duration(seconds: 30);
 
-  int _lastVerifiedFaceCount = 0;
+  // ✅ FIXED: Track UNIQUE people, not faces
+  int _lastVerifiedPeopleCount = 0;
   int _lastKnownCount = 0;
   int _lastUnknownCount = 0;
   DateTime _lastVerificationTime = DateTime.fromMillisecondsSinceEpoch(0);
@@ -189,23 +190,42 @@ class SurveillanceController {
     debugPrint('⏹️ CONTINUOUS VERIFICATION STOPPED');
   }
 
+  // ✅ FIXED: Adaptive delay to prevent UI freeze
   Future<void> _continuousVerificationLoop() async {
+    int cycleDelayMs = 2000;  // Start with 2 second delay
+    
     while (_continuousRunning && mounted && _autoVerify) {
       _verificationCycle++;
       
       debugPrint('');
-      debugPrint('🔄 ══ Cycle $_verificationCycle ══');
+      debugPrint('🔄 ══ Cycle $_verificationCycle (delay: ${cycleDelayMs}ms) ══');
       
+      final startTime = DateTime.now();
       await _runVerification();
+      final duration = DateTime.now().difference(startTime).inMilliseconds;
       
-      // ✅ Small delay between cycles to prevent overload
-      await Future.delayed(const Duration(milliseconds: 500));
+      debugPrint('⏱️ Verification took ${duration}ms');
+      
+      // ✅ Adaptive delay based on verification speed
+      if (duration > 2000) {
+        cycleDelayMs = 4000;  // If very slow, wait 4 seconds
+        debugPrint('⚠️ Slow verification detected, increasing delay to 4s');
+      } else if (duration > 1000) {
+        cycleDelayMs = 3000;  // If medium speed, wait 3 seconds
+        debugPrint('⚠️ Medium speed verification, using 3s delay');
+      } else {
+        cycleDelayMs = 2000;  // If fast, wait 2 seconds
+      }
+      
+      // Wait before next cycle
+      await Future.delayed(Duration(milliseconds: cycleDelayMs));
     }
     
     _continuousRunning = false;
     debugPrint('⏹️ Continuous loop ended');
   }
 
+  // ✅ FIXED: Status polling with correct group detection logic
   void _startStatusPolling() {
     _statusTimer?.cancel();
     _statusTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
@@ -217,23 +237,26 @@ class SurveillanceController {
       final timeSinceVerification = DateTime.now().difference(_lastVerificationTime);
       final hasRecentVerification = timeSinceVerification.inSeconds < 10;
 
+      // ✅ FIXED LOGIC:
+      // Priority 1: Trust YOLO body detection (most reliable for GROUP detection)
+      // Priority 2: Use face verification as secondary (for unknown alerts)
+      // Priority 3: Never count same person twice
+      
       int totalPeople = yoloPeople;
       String peopleBreakdown = '';
       
-      if (hasRecentVerification && _lastVerifiedFaceCount > 0) {
-        totalPeople = max(yoloPeople, _lastVerifiedFaceCount);
-        
-        if (_lastKnownCount > 0 || _lastUnknownCount > 0) {
-          peopleBreakdown = ' (${_lastKnownCount} known, ${_lastUnknownCount} unknown';
-          
-          if (yoloPeople > _lastVerifiedFaceCount) {
-            peopleBreakdown += ', ${yoloPeople - _lastVerifiedFaceCount} unverified';
-          }
-          
-          peopleBreakdown += ')';
+      if (hasRecentVerification && _lastVerifiedPeopleCount > 0) {
+        // If face verification found MORE people than YOLO, use that
+        // (e.g., YOLO missed someone partially visible)
+        if (_lastVerifiedPeopleCount > yoloPeople) {
+          totalPeople = _lastVerifiedPeopleCount;
+          debugPrint('📊 Using face verification count ($totalPeople) > YOLO count ($yoloPeople)');
         }
-      } else if (yoloPeople > 0) {
-        peopleBreakdown = ' (YOLO)';
+        
+        // Add breakdown of known/unknown
+        if (_lastKnownCount > 0 || _lastUnknownCount > 0) {
+          peopleBreakdown = ' (${_lastKnownCount}K + ${_lastUnknownCount}U)';
+        }
       }
 
       bool isGroup = totalPeople >= _multi.groupThreshold;
@@ -332,7 +355,7 @@ class SurveillanceController {
     _multi.detectAllAsync(image);
   }
 
-  // ✅ CORE: Capture → Detect Face → Verify → Return
+  // ✅ FIXED: Better handling of face distance filtering + non-blocking verification
   Future<void> _runVerification() async {
     if (_processingVerification || !mounted) return;
     
@@ -359,7 +382,7 @@ class SurveillanceController {
       await File(shot.path).copy(backupPath);
       _lastCapturedImagePath = backupPath;
       
-      // Step 3: Restart stream immediately
+      // Step 3: Restart stream IMMEDIATELY (don't wait)
       if (mounted && _camera.isInitialized) {
         unawaited(_camera.startStream(_onFrame));
       }
@@ -370,7 +393,7 @@ class SurveillanceController {
         faceInfos = await _detector.detectAndCropAllFacesWithDistance(shot.path);
       } catch (e) {
         // No face found - this is normal when nobody is in frame
-        _lastVerifiedFaceCount = 0;
+        _lastVerifiedPeopleCount = 0;
         _lastKnownCount = 0;
         _lastUnknownCount = 0;
         _lastVerificationTime = DateTime.now();
@@ -385,7 +408,11 @@ class SurveillanceController {
       
       debugPrint('👤 Found ${faceInfos.length} face(s) in cycle $_verificationCycle');
       
-      // Step 5: Filter by distance
+      // ✅ FIXED: Count ALL detected faces for group detection
+      // Distance filtering is only for VERIFICATION quality, not for counting people
+      int totalDetectedFaces = faceInfos.length;
+      
+      // Step 5: Filter by distance for VERIFICATION ONLY
       final validFaces = <img.Image>[];
       _facesTooFar = 0;
       _facesTooClose = 0;
@@ -400,31 +427,45 @@ class SurveillanceController {
         }
       }
       
+      debugPrint('📊 Distance breakdown: ${validFaces.length} good, $_facesTooFar too far, $_facesTooClose too close');
+      
+      // ✅ CRITICAL FIX: Update people count with ALL detected faces
+      // This ensures group detection works even if verification distance is poor
+      _lastVerifiedPeopleCount = totalDetectedFaces;
+      _lastVerificationTime = DateTime.now();
+      
       if (validFaces.isEmpty) {
-        String reason = 'No faces in valid range';
-        if (_facesTooFar > 0) reason = '$_facesTooFar too far';
-        if (_facesTooClose > 0) reason = '$_facesTooClose too close';
+        String reason = '';
+        if (_facesTooFar > 0) reason = '$_facesTooFar too far for verification';
+        if (_facesTooClose > 0) {
+          reason += (reason.isNotEmpty ? ', ' : '') + '$_facesTooClose too close for verification';
+        }
+        if (reason.isEmpty) reason = 'No faces in valid range';
         
         if (mounted) {
-          _updateState(_state.copyWith(faceStatus: reason));
+          _updateState(_state.copyWith(
+            faceStatus: '$totalDetectedFaces face(s) detected but $reason - cannot verify',
+          ));
         }
         
         _cleanupImage(shot.path);
         return;
       }
       
-      // Step 6: Verify faces
-      debugPrint('🔍 Verifying ${validFaces.length} face(s)...');
+      // Step 6: Verify only the good-distance faces
+      debugPrint('🔍 Verifying ${validFaces.length} face(s) (${_facesTooFar + _facesTooClose} skipped)...');
       
       _lastDetectedFaces = validFaces;
-      final results = _verifier.verifyMultipleFaces(validFaces);
+      
+      // ✅ FIXED: Run verification with yield points to prevent UI freeze
+      final results = await _verifyFacesWithYield(validFaces);
       
       // Step 7: Process results
       if (mounted) {
         await _processVerificationResults(
           results, 
           validFaces.length, 
-          faceInfos.length,
+          totalDetectedFaces,  // ← Pass total detected, not just verified
           backupPath,
           validFaces,
         );
@@ -456,6 +497,25 @@ class SurveillanceController {
     }
   }
 
+  // ✅ NEW: Verify faces with yield points to prevent UI freeze
+  Future<List<VerificationResult>> _verifyFacesWithYield(
+    List<img.Image> faces,
+  ) async {
+    final results = <VerificationResult>[];
+    
+    for (int i = 0; i < faces.length; i++) {
+      final result = _verifier.verifyFace(faces[i]);
+      results.add(result);
+      
+      // ✅ Yield to event loop every face to keep UI responsive
+      await Future.delayed(Duration.zero);
+      
+      if (!mounted) break;
+    }
+    
+    return results;
+  }
+
   void _cleanupImage(String imagePath) {
     Future.delayed(Duration(seconds: 1), () {
       try {
@@ -474,6 +534,7 @@ class SurveillanceController {
     });
   }
 
+  // ✅ FIXED: Correct people counting logic
   Future<void> _processVerificationResults(
     List<VerificationResult> results,
     int verifiedFaceCount,
@@ -481,9 +542,11 @@ class SurveillanceController {
     String framePath,
     List<img.Image> detectedFaces,
   ) async {
+    // ✅ FIX: Count UNIQUE people, not total faces
     int knownCount = 0;
     int unknownCount = 0;
-    final knownNames = <String>[];
+    final knownNames = <String>{};  // ✅ Set to avoid duplicate counting
+    bool hasUnknownFace = false;
 
     for (final result in results) {
       if (result.verified && result.person != null) {
@@ -498,26 +561,27 @@ class SurveillanceController {
         }
         
         _recentlyVerified[name] = DateTime.now();
-        
-        knownCount++;
-        if (!knownNames.contains(name)) {
-          knownNames.add(name);
-        }
+        knownNames.add(name);  // ✅ Add to set (auto-deduplicates)
       } else {
+        // ✅ FIX: Unknown face detected
         unknownCount++;
+        hasUnknownFace = true;
         debugPrint('⚠️ UNKNOWN face detected!');
       }
     }
 
-    _lastVerifiedFaceCount = verifiedFaceCount;
-    _lastKnownCount = knownCount;
-    _lastUnknownCount = unknownCount;
-    _lastVerificationTime = DateTime.now();
+    // ✅ IMPORTANT: Count ACTUAL unique people
+    // knownCount = number of UNIQUE known people
+    // unknownCount = number of UNKNOWN faces (treat each as potential different person)
+    int totalVerifiedPeople = knownNames.length + unknownCount;
 
-    debugPrint('📊 Cycle $_verificationCycle: $knownCount known, $unknownCount unknown');
+    _lastKnownCount = knownNames.length;             // ✅ Unique known people
+    _lastUnknownCount = unknownCount;                // ✅ Unknown faces
 
-    // ✅ Save and alert for unknown faces
-    if (unknownCount > 0) {
+    debugPrint('📊 Cycle $_verificationCycle: ${knownNames.length} unique known people, $unknownCount unknown (out of $verifiedFaceCount verified, $totalDetectedFaces total detected)');
+
+    // ✅ FIX: Only save unknown face alert if it's truly unknown
+    if (hasUnknownFace && unknownCount > 0) {
       debugPrint('🚨 SAVING UNKNOWN FACE ALERT');
       
       final lensName = _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
@@ -526,7 +590,7 @@ class SurveillanceController {
       try {
         savedImagePath = await _imageService.saveUnknownFaceImage(
           framePath,
-          additionalInfo: 'unknown${unknownCount}_known${knownCount}',
+          additionalInfo: 'unknown${unknownCount}_known${knownNames.length}',
         );
         debugPrint('✅ Frame saved: $savedImagePath');
       } catch (e) {
@@ -538,7 +602,7 @@ class SurveillanceController {
         savedFacePaths = await _imageService.saveFaceImages(
           detectedFaces,
           alertType: 'unknown_face',
-          sessionInfo: 'u${unknownCount}_k${knownCount}',
+          sessionInfo: 'u${unknownCount}_k${knownNames.length}',
         );
         debugPrint('✅ Saved ${savedFacePaths.length} face crops');
       } catch (e) {
@@ -554,12 +618,14 @@ class SurveillanceController {
       );
     }
 
-    // ✅ Update UI
+    // ✅ Update UI with correct status
     String statusMsg;
-    if (knownCount > 0 && unknownCount > 0) {
-      statusMsg = '✅ ${knownNames.join(", ")} | ⚠️ $unknownCount unknown';
-    } else if (knownCount > 0) {
-      statusMsg = '✅ ${knownNames.join(", ")}';
+    final knownList = knownNames.toList();
+    
+    if (knownList.isNotEmpty && unknownCount > 0) {
+      statusMsg = '✅ ${knownList.join(", ")} | ⚠️ $unknownCount unknown';
+    } else if (knownList.isNotEmpty) {
+      statusMsg = '✅ ${knownList.join(", ")}';
     } else if (unknownCount > 0) {
       statusMsg = '⚠️ $unknownCount unknown';
     } else {
@@ -569,7 +635,7 @@ class SurveillanceController {
     if (mounted) {
       _updateState(_state.copyWith(
         faceStatus: statusMsg,
-        lastMatch: knownNames.isNotEmpty ? knownNames.join(', ') : '',
+        lastMatch: knownList.isNotEmpty ? knownList.join(', ') : '',
       ));
     }
   }
@@ -621,7 +687,7 @@ class SurveillanceController {
       _recentlyVerified.clear();
       _processingVerification = false;
       
-      _lastVerifiedFaceCount = 0;
+      _lastVerifiedPeopleCount = 0;
       _lastKnownCount = 0;
       _lastUnknownCount = 0;
 

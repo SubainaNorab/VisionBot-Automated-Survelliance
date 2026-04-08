@@ -1,4 +1,4 @@
-// sm_grp.dart - FIX YOLO DETECTION WITH AUTO-DETECT COORDINATE FORMAT
+// sm_grp.dart - FIXED YOLO DETECTION WITH LOWERED THRESHOLDS
 
 import 'dart:async';
 import 'dart:typed_data';
@@ -238,7 +238,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
   }
 }
 
-// ✅ FIXED: Auto-detect coordinate format + detailed debug
+// ✅ FIXED: Auto-detect coordinate format + LOWERED thresholds
 int _countPersons(List output) {
   final preds = output[0] as List<List<double>>;
 
@@ -292,15 +292,18 @@ int _countPersons(List output) {
     }
   }
   
-  // ✅ STEP 3: Count persons with auto-scaling
+  // ✅ STEP 3: Count persons with LOWERED thresholds
   final boxes = <_Box>[];
   int candidateCount = 0;
   int filteredSmall = 0;
 
+  // ✅ LOWERED: 0.15 instead of 0.25 for better detection
+  const double CONFIDENCE_THRESHOLD = 0.15;
+
   for (int i = 0; i < 8400; i++) {
     final personScore = preds[4][i];
     
-    if (personScore < 0.25) continue; // ✅ Lowered from 0.30 to 0.25
+    if (personScore < CONFIDENCE_THRESHOLD) continue;
     
     candidateCount++;
 
@@ -322,7 +325,8 @@ int _countPersons(List output) {
       debugPrint('   Candidate $candidateCount: score=${personScore.toStringAsFixed(3)}, pos=(${cx.toStringAsFixed(1)},${cy.toStringAsFixed(1)}), size=${bw.toStringAsFixed(1)}x${bh.toStringAsFixed(1)}');
     }
 
-    if (bh < 40 || bw < 20) { // ✅ Lowered minimum size
+    // ✅ LOWERED minimum size: 20px instead of 40px
+    if (bh < 20 || bw < 10) {
       filteredSmall++;
       continue;
     }
@@ -336,7 +340,7 @@ int _countPersons(List output) {
     ));
   }
 
-  debugPrint('   Candidates (>0.25): $candidateCount, filtered small: $filteredSmall, kept: ${boxes.length}');
+  debugPrint('   Candidates (>$CONFIDENCE_THRESHOLD): $candidateCount, filtered small: $filteredSmall, kept: ${boxes.length}');
 
   final count = _nms(boxes, 0.45);
   
