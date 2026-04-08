@@ -1,4 +1,4 @@
-// sm_grp.dart - FIXED YOLO DETECTION WITH LOWERED THRESHOLDS
+// sm_grp.dart - FIXED: Better multi-person detection
 
 import 'dart:async';
 import 'dart:typed_data';
@@ -86,7 +86,6 @@ class MultiDetectorService {
         final modelFile = await rootBundle.load('assets/yolov8n.tflite');
         _yoloModelData = modelFile.buffer.asUint8List();
         
-        // ✅ Log model input/output shape
         final inputShape = _yolo!.getInputTensor(0).shape;
         final outputShape = _yolo!.getOutputTensor(0).shape;
         debugPrint('✅ YOLO loaded (${_yoloModelData!.length} bytes)');
@@ -238,66 +237,44 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
   }
 }
 
-// ✅ FIXED: Auto-detect coordinate format + LOWERED thresholds
+// ✅ FIXED: Lower NMS IOU threshold for better multi-person detection
 int _countPersons(List output) {
   final preds = output[0] as List<List<double>>;
 
   const int inputSize = 640;
 
-  // ✅ STEP 1: Find the best person score and check raw values
   double maxPersonScore = 0.0;
   int bestIdx = -1;
   
-  // ✅ Also check ALL 80 COCO classes (not just index 4)
-  // YOLOv8 output: [x, y, w, h, class0, class1, ..., class79]
-  // class0 = person
-  double maxAnyClassScore = 0.0;
-  int maxClassIdx = -1;
-  
   for (int i = 0; i < 8400; i++) {
-    // Person is class 0, so it's at index 4
     final personScore = preds[4][i];
     if (personScore > maxPersonScore) {
       maxPersonScore = personScore;
       bestIdx = i;
     }
-    
-    // Check all classes
-    for (int c = 4; c < 84; c++) {
-      if (preds[c][i] > maxAnyClassScore) {
-        maxAnyClassScore = preds[c][i];
-        maxClassIdx = c - 4;
-      }
-    }
   }
 
-  // ✅ STEP 2: Log raw values for debugging
   debugPrint('🔍 YOLO Raw Output Analysis:');
   debugPrint('   Max person (class 0) score: ${maxPersonScore.toStringAsFixed(4)}');
-  debugPrint('   Max ANY class score: ${maxAnyClassScore.toStringAsFixed(4)} (class $maxClassIdx)');
   
   if (bestIdx >= 0) {
     final rawCx = preds[0][bestIdx];
     final rawCy = preds[1][bestIdx];
     final rawBw = preds[2][bestIdx];
     final rawBh = preds[3][bestIdx];
-    debugPrint('   Best person raw bbox: cx=${rawCx.toStringAsFixed(4)}, cy=${rawCy.toStringAsFixed(4)}, w=${rawBw.toStringAsFixed(4)}, h=${rawBh.toStringAsFixed(4)}');
-    debugPrint('   Score: ${maxPersonScore.toStringAsFixed(4)}');
+    debugPrint('   Best person: score=${maxPersonScore.toStringAsFixed(4)}');
     
-    // ✅ Auto-detect format
     if (rawCx <= 1.5 && rawCy <= 1.5 && rawBw <= 1.5 && rawBh <= 1.5) {
-      debugPrint('   📐 Format: NORMALIZED (0-1) → scaling by $inputSize');
+      debugPrint('   📐 Format: NORMALIZED (0-1)');
     } else {
-      debugPrint('   📐 Format: PIXEL coordinates (0-$inputSize)');
+      debugPrint('   📐 Format: PIXEL coordinates');
     }
   }
   
-  // ✅ STEP 3: Count persons with LOWERED thresholds
   final boxes = <_Box>[];
   int candidateCount = 0;
   int filteredSmall = 0;
 
-  // ✅ LOWERED: 0.15 instead of 0.25 for better detection
   const double CONFIDENCE_THRESHOLD = 0.15;
 
   for (int i = 0; i < 8400; i++) {
@@ -312,7 +289,6 @@ int _countPersons(List output) {
     double bw = preds[2][i];
     double bh = preds[3][i];
 
-    // ✅ Auto-detect: if values < 2.0, they are normalized (0-1)
     if (cx < 2.0 && cy < 2.0 && bw < 2.0 && bh < 2.0) {
       cx *= inputSize;
       cy *= inputSize;
@@ -320,12 +296,10 @@ int _countPersons(List output) {
       bh *= inputSize;
     }
 
-    // Log first 3 candidates
     if (candidateCount <= 3) {
-      debugPrint('   Candidate $candidateCount: score=${personScore.toStringAsFixed(3)}, pos=(${cx.toStringAsFixed(1)},${cy.toStringAsFixed(1)}), size=${bw.toStringAsFixed(1)}x${bh.toStringAsFixed(1)}');
+      debugPrint('   Candidate $candidateCount: score=${personScore.toStringAsFixed(3)}, size=${bw.toStringAsFixed(1)}x${bh.toStringAsFixed(1)}');
     }
 
-    // ✅ LOWERED minimum size: 20px instead of 40px
     if (bh < 20 || bw < 10) {
       filteredSmall++;
       continue;
@@ -340,9 +314,10 @@ int _countPersons(List output) {
     ));
   }
 
-  debugPrint('   Candidates (>$CONFIDENCE_THRESHOLD): $candidateCount, filtered small: $filteredSmall, kept: ${boxes.length}');
+  debugPrint('   Candidates: $candidateCount, filtered: $filteredSmall, kept: ${boxes.length}');
 
-  final count = _nms(boxes, 0.45);
+  // ✅ FIXED: Lower NMS threshold from 0.45 to 0.30 for better multi-person
+  final count = _nms(boxes, 0.30);
   
   if (count > 0) {
     debugPrint('   🎯 DETECTED $count PERSON(S)!');
