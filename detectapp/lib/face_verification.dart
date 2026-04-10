@@ -1,10 +1,11 @@
-// face_verification.dart - FIXED: Crash recovery + fallback handling
+// face_verification.dart - COMPLETE REWRITE: Proper embedding handling + debugging
 
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:flutter/foundation.dart';
 
 import 'model/person.dart';
 
@@ -26,6 +27,7 @@ class FaceVerificationService {
   static const String _collection = 'enrolled_faces';
   static const String _modelPath = 'assets/facenet.tflite';
 
+  // ✅ UPDATED: Threshold tuned for FaceNet
   static const double threshold = 0.45;
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -37,36 +39,35 @@ class FaceVerificationService {
   int _embSize = 128;
 
   final List<Person> _people = [];
-  
-  // ✅ NEW: Track if verification is working
-  bool _verificationBroken = false;
 
   Future<void> initialize() async {
-    print('🔧 FaceVerification initialize');
+    debugPrint('');
+    debugPrint('═══════════════════════════════════');
+    debugPrint('🔧 FaceVerification initialize');
+    debugPrint('═══════════════════════════════════');
+    
     await _loadModel();
     await _loadPeople();
+    
+    debugPrint('✅ FaceVerification initialized');
+    debugPrint('═══════════════════════════════════');
+    debugPrint('');
   }
 
   void dispose() {
     try {
       _interpreter?.close();
       _interpreter = null;
+      debugPrint('✅ FaceVerification disposed');
     } catch (e) {
-      print('⚠️ Dispose error: $e');
+      debugPrint('⚠️ Dispose error: $e');
     }
   }
 
-  /// ✅ FIXED: Handle verification failures gracefully
+  /// ✅ FIXED: Verify single face with complete error handling
   VerificationResult verifyFace(img.Image face) {
     try {
-      // ✅ If verification is broken, return unknown
-      if (_verificationBroken) {
-        print('⚠️ Verification system broken, treating as unknown');
-        return _fail('Verification system offline');
-      }
-      
       if (_interpreter == null) {
-        _verificationBroken = true;
         return _fail('Model not loaded');
       }
 
@@ -74,33 +75,67 @@ class FaceVerificationService {
         return _fail('No enrolled faces');
       }
 
-      // ✅ Validate input
-      if (face.width < 100 || face.height < 100) {
+      // ✅ Validate input face size
+      if (face.width < 80 || face.height < 80) {
+        debugPrint('⚠️ Face too small: ${face.width}x${face.height}');
         return _fail('Face too small for verification');
       }
+
+      debugPrint('🔍 Verifying face (${face.width}x${face.height})...');
 
       final input = _preprocess(face);
       final candidate = _embedding(input);
 
+      // ✅ Validate embedding
+      if (candidate.isEmpty) {
+        return _fail('Failed to generate embedding');
+      }
+
+      if (!_isValidEmbedding(candidate)) {
+        debugPrint('❌ Invalid embedding: contains NaN or Inf');
+        return _fail('Invalid embedding generated');
+      }
+
+      final candidateNorm = _getEmbeddingNorm(candidate);
+      debugPrint('   Candidate embedding norm: ${candidateNorm.toStringAsFixed(4)}');
+
       double bestDist = double.infinity;
       Person? bestPerson;
 
+      // ✅ Find closest match
+      debugPrint('   Comparing against ${_people.length} enrolled people...');
       for (final p in _people) {
-        final d = _cosineDistance(candidate, p.embedding);
-        if (d < bestDist) {
-          bestDist = d;
-          bestPerson = p;
+        try {
+          if (!_isValidEmbedding(p.embedding)) {
+            debugPrint('   ⚠️ Skipping ${p.name}: invalid enrollment embedding');
+            continue;
+          }
+
+          final d = _cosineDistance(candidate, p.embedding);
+          debugPrint('   ${p.name}: distance=${d.toStringAsFixed(4)}');
+
+          if (d < bestDist) {
+            bestDist = d;
+            bestPerson = p;
+          }
+        } catch (e) {
+          debugPrint('   ❌ Error comparing to ${p.name}: $e');
+          continue;
         }
       }
 
+      // ✅ Check if matched
       final matched = bestDist <= threshold;
       final confidence = (1.0 - (bestDist / threshold)).clamp(0.0, 1.0);
 
-      print(
-        matched
-            ? '✅ MATCH ${bestPerson!.name} dist=${bestDist.toStringAsFixed(3)}'
-            : '⚠️ NO MATCH dist=${bestDist.toStringAsFixed(3)}',
-      );
+      if (matched && bestPerson != null) {
+        debugPrint('✅ MATCH: ${bestPerson.name}');
+        debugPrint('   Distance: ${bestDist.toStringAsFixed(4)} (threshold: ${threshold.toStringAsFixed(4)})');
+        debugPrint('   Confidence: ${(confidence * 100).toStringAsFixed(1)}%');
+      } else {
+        debugPrint('⚠️ NO MATCH');
+        debugPrint('   Best distance: ${bestDist.toStringAsFixed(4)} (threshold: ${threshold.toStringAsFixed(4)})');
+      }
 
       return VerificationResult(
         verified: matched,
@@ -108,21 +143,19 @@ class FaceVerificationService {
         confidence: confidence,
         message: matched
             ? 'Verified ${bestPerson!.name}'
-            : 'Not matched (distance=${bestDist.toStringAsFixed(3)})',
+            : 'Unknown (dist=${bestDist.toStringAsFixed(3)})',
       );
     } catch (e, st) {
-      print('❌ Verification error: $e');
-      print('   Stack: $st');
-      _verificationBroken = true;
-      return _fail('Verification failed: $e');
+      debugPrint('❌ Verify face error: $e');
+      debugPrint('   Stack: $st');
+      return _fail('Verification error: $e');
     }
   }
 
-  /// ✅ FIXED: Handle multiple faces with crash recovery
+  /// ✅ FIXED: Verify multiple faces with individual error handling
   List<VerificationResult> verifyMultipleFaces(List<img.Image> faces) {
     try {
       if (_interpreter == null) {
-        _verificationBroken = true;
         return [_fail('Model not loaded')];
       }
 
@@ -130,48 +163,77 @@ class FaceVerificationService {
         return [_fail('No enrolled faces')];
       }
 
+      if (faces.isEmpty) {
+        return [_fail('No faces to verify')];
+      }
+
+      debugPrint('');
+      debugPrint('🔍 Verifying ${faces.length} face(s)...');
+
       final results = <VerificationResult>[];
 
       for (int i = 0; i < faces.length; i++) {
         try {
-          // ✅ If broken, treat all remaining as unknown
-          if (_verificationBroken) {
-            print('⚠️ Verification broken, treating face ${i+1} as unknown');
-            results.add(_fail('Verification system offline'));
-            continue;
-          }
-          
           final face = faces[i];
-          
+          debugPrint('');
+          debugPrint('   Face ${i + 1}/${faces.length} (${face.width}x${face.height})');
+
           // ✅ Validate input
-          if (face.width < 100 || face.height < 100) {
-            print('⚠️ Face ${i+1} too small (${face.width}x${face.height})');
+          if (face.width < 80 || face.height < 80) {
+            debugPrint('   ⚠️ Too small for verification');
             results.add(_fail('Face too small'));
             continue;
           }
 
+          // ✅ Generate embedding for this face
           final input = _preprocess(face);
           final candidate = _embedding(input);
 
+          if (candidate.isEmpty) {
+            debugPrint('   ⚠️ Embedding generation failed');
+            results.add(_fail('No embedding generated'));
+            continue;
+          }
+
+          if (!_isValidEmbedding(candidate)) {
+            debugPrint('   ⚠️ Embedding contains NaN/Inf');
+            results.add(_fail('Invalid embedding'));
+            continue;
+          }
+
+          final candidateNorm = _getEmbeddingNorm(candidate);
+          debugPrint('   Embedding norm: ${candidateNorm.toStringAsFixed(4)}');
+
+          // ✅ Find closest enrolled person
           double bestDist = double.infinity;
           Person? bestPerson;
 
           for (final p in _people) {
-            final d = _cosineDistance(candidate, p.embedding);
-            if (d < bestDist) {
-              bestDist = d;
-              bestPerson = p;
+            try {
+              if (!_isValidEmbedding(p.embedding)) {
+                continue;
+              }
+
+              final d = _cosineDistance(candidate, p.embedding);
+              if (d < bestDist) {
+                bestDist = d;
+                bestPerson = p;
+              }
+            } catch (e) {
+              debugPrint('   ⚠️ Error with ${p.name}: $e');
+              continue;
             }
           }
 
+          // ✅ Check match
           final matched = bestDist <= threshold;
           final confidence = (1.0 - (bestDist / threshold)).clamp(0.0, 1.0);
 
-          print(
-            matched
-                ? '✅ MATCH [${i + 1}/${faces.length}] ${bestPerson!.name} dist=${bestDist.toStringAsFixed(3)}'
-                : '⚠️ NO MATCH [${i + 1}/${faces.length}] dist=${bestDist.toStringAsFixed(3)}',
-          );
+          if (matched && bestPerson != null) {
+            debugPrint('   ✅ MATCH: ${bestPerson.name} (dist=${bestDist.toStringAsFixed(4)})');
+          } else {
+            debugPrint('   ⚠️ NO MATCH (dist=${bestDist.toStringAsFixed(4)})');
+          }
 
           results.add(VerificationResult(
             verified: matched,
@@ -182,50 +244,106 @@ class FaceVerificationService {
                 : 'Unknown (dist=${bestDist.toStringAsFixed(3)})',
           ));
         } catch (e, st) {
-          print('❌ Face ${i+1} verification error: $e');
-          print('   Stack: $st');
-          _verificationBroken = true;
-          
-          // ✅ Add unknown result for this face
-          results.add(_fail('Verification failed'));
+          debugPrint('   ❌ Error: $e');
+          debugPrint('      Stack: $st');
+          // ✅ Add unknown result for this face, continue to next
+          results.add(_fail('Face verification failed'));
         }
       }
 
+      debugPrint('');
       return results;
     } catch (e, st) {
-      print('❌ Batch verification error: $e');
-      print('   Stack: $st');
-      _verificationBroken = true;
+      debugPrint('❌ Batch verification error: $e');
+      debugPrint('   Stack: $st');
       return [_fail('Batch verification failed: $e')];
     }
+  }
+
+  // ✅ NEW: Validate embedding is real number
+  bool _isValidEmbedding(List<double> embedding) {
+    for (final val in embedding) {
+      if (val.isNaN || val.isInfinite) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // ✅ NEW: Get embedding L2 norm
+  double _getEmbeddingNorm(List<double> embedding) {
+    double sum = 0;
+    for (final val in embedding) {
+      sum += val * val;
+    }
+    return sqrt(sum);
   }
 
   Future<void> _loadPeople() async {
     try {
       _people.clear();
 
+      debugPrint('📥 Loading enrolled faces from Firebase...');
+
       final snap = await _db.collection(_collection).get();
 
+      debugPrint('   Found ${snap.docs.length} documents');
+
       for (final doc in snap.docs) {
-        final p = Person.fromFirestore(doc.id, doc.data());
+        try {
+          final p = Person.fromFirestore(doc.id, doc.data());
 
-        if (p.embedding.length != _embSize) continue;
+          // ✅ Validate enrollment data
+          if (p.embedding.isEmpty) {
+            debugPrint('   ⚠️ Skipping ${p.name}: empty embedding');
+            continue;
+          }
 
-        _people.add(p);
+          if (p.embedding.length != _embSize) {
+            debugPrint('   ⚠️ Skipping ${p.name}: embedding size ${p.embedding.length} != $_embSize');
+            continue;
+          }
+
+          // ✅ Validate embedding is valid numbers
+          if (!_isValidEmbedding(p.embedding)) {
+            debugPrint('   ⚠️ Skipping ${p.name}: contains NaN/Inf');
+            continue;
+          }
+
+          // ✅ Check embedding norm
+          final norm = _getEmbeddingNorm(p.embedding);
+          debugPrint('   ✅ Loaded ${p.name}');
+          debugPrint('      Embedding size: ${p.embedding.length}');
+          debugPrint('      Norm: ${norm.toStringAsFixed(4)}');
+          debugPrint('      First 5 values: ${p.embedding.take(5).map((v) => v.toStringAsFixed(4)).join(', ')}');
+
+          _people.add(p);
+        } catch (e, st) {
+          debugPrint('   ❌ Failed to load ${doc.id}: $e');
+          debugPrint('      Stack: $st');
+          continue;
+        }
       }
 
-      print('✅ Loaded ${_people.length} enrolled people');
-    } catch (e) {
-      print('❌ Load people error: $e');
+      debugPrint('✅ Loaded ${_people.length} enrolled people');
+
+      if (_people.isEmpty) {
+        debugPrint('⚠️ WARNING: No enrolled faces loaded!');
+      }
+    } catch (e, st) {
+      debugPrint('❌ Load people error: $e');
+      debugPrint('   Stack: $st');
     }
   }
 
   Future<void> _loadModel() async {
     try {
+      debugPrint('📥 Loading FaceNet model...');
+
       final bytes = await rootBundle.load(_modelPath);
       _interpreter = Interpreter.fromBuffer(
         bytes.buffer.asUint8List(),
-        options: InterpreterOptions()..threads = 1,  // ✅ Single thread to avoid crashes
+        options: InterpreterOptions()..threads = 1,
       );
 
       final inShape = _interpreter!.getInputTensor(0).shape;
@@ -235,16 +353,19 @@ class FaceVerificationService {
       _inputW = inShape[2];
       _embSize = outShape.last;
 
-      print('✅ Model loaded input=$_inputW x $_inputH emb=$_embSize');
+      debugPrint('✅ Model loaded');
+      debugPrint('   Input shape: ${inShape[0]}x${_inputW}x${_inputH}x${inShape[3]}');
+      debugPrint('   Output shape: ${outShape[0]}x${_embSize}');
     } catch (e, st) {
-      print('❌ Model load error: $e');
-      print('   Stack: $st');
-      _verificationBroken = true;
+      debugPrint('❌ Model load error: $e');
+      debugPrint('   Stack: $st');
     }
   }
 
+  // ✅ FIXED: Proper preprocessing matching enrollment
   List<List<List<List<double>>>> _preprocess(img.Image face) {
     try {
+      // ✅ Resize to model input size
       final resized = img.copyResize(face, width: _inputW, height: _inputH);
 
       final input = List.generate(
@@ -255,6 +376,8 @@ class FaceVerificationService {
         ),
       );
 
+      // ✅ Convert to normalized float [0.0, 1.0]
+      // Match Python: face_normalized = face_rgb.astype(np.float32) / 255.0
       for (int y = 0; y < _inputH; y++) {
         for (int x = 0; x < _inputW; x++) {
           final p = resized.getPixel(x, y);
@@ -267,13 +390,12 @@ class FaceVerificationService {
 
       return input;
     } catch (e) {
-      print('❌ Preprocess error: $e');
-      _verificationBroken = true;
+      debugPrint('❌ Preprocess error: $e');
       rethrow;
     }
   }
 
-  // ✅ FIXED: Add crash recovery in embedding
+  // ✅ FIXED: Generate embedding with proper L2 normalization
   List<double> _embedding(List<List<List<List<double>>>> input) {
     try {
       if (_interpreter == null) {
@@ -282,58 +404,77 @@ class FaceVerificationService {
 
       final out = List.generate(1, (_) => List.filled(_embSize, 0.0));
 
-      // ✅ This is where it crashes - wrap in try-catch
-      try {
-        _interpreter!.run(input, out);
-      } catch (e, st) {
-        print('❌ TFLite inference crash: $e');
-        print('   Stack: $st');
-        _verificationBroken = true;
-        rethrow;
-      }
+      // ✅ Run inference
+      _interpreter!.run(input, out);
 
       final emb = out[0];
 
-      final norm = sqrt(emb.fold(0.0, (s, v) => s + v * v));
-      
-      // ✅ Safety check for invalid norm
-      if (norm == 0 || norm.isNaN || norm.isInfinite) {
-        print('❌ Invalid embedding norm: $norm');
-        _verificationBroken = true;
-        throw Exception('Invalid embedding: norm=$norm');
+      // ✅ L2 normalize (match Python: embedding_flat / norm)
+      // This is EXACTLY what the enrollment script does
+      double normSqSum = 0;
+      for (final v in emb) {
+        normSqSum += v * v;
       }
-      
+
+      final norm = sqrt(normSqSum);
+
+      if (norm == 0 || norm.isNaN || norm.isInfinite) {
+        debugPrint('❌ Invalid norm: $norm');
+        throw Exception('Invalid embedding norm: $norm');
+      }
+
       for (int i = 0; i < emb.length; i++) {
         emb[i] /= norm;
       }
 
-      print(
-        '🧠 Embedding ok l2=${norm.toStringAsFixed(4)} '
-        'range=[${emb.reduce(min).toStringAsFixed(3)}, '
-        '${emb.reduce(max).toStringAsFixed(3)}]',
-      );
+      // ✅ Validate result
+      for (final val in emb) {
+        if (val.isNaN || val.isInfinite) {
+          debugPrint('❌ Embedding contains NaN/Inf after normalization');
+          throw Exception('Invalid normalized embedding');
+        }
+      }
 
       return emb;
     } catch (e, st) {
-      print('❌ Embedding error: $e');
-      print('   Stack: $st');
-      _verificationBroken = true;
+      debugPrint('❌ Embedding error: $e');
+      debugPrint('   Stack: $st');
       rethrow;
     }
   }
 
+  // ✅ FIXED: Proper cosine distance calculation
   double _cosineDistance(List<double> a, List<double> b) {
     try {
-      double dot = 0, na = 0, nb = 0;
+      if (a.length != b.length) {
+        throw Exception('Embedding size mismatch: ${a.length} vs ${b.length}');
+      }
+
+      double dot = 0;
+      double naSqSum = 0;
+      double nbSqSum = 0;
+
       for (int i = 0; i < a.length; i++) {
         dot += a[i] * b[i];
-        na += a[i] * a[i];
-        nb += b[i] * b[i];
+        naSqSum += a[i] * a[i];
+        nbSqSum += b[i] * b[i];
       }
-      final result = 1.0 - (dot / (sqrt(na) * sqrt(nb)));
-      return result.clamp(-1.0, 1.0);  // ✅ Clamp to valid range
+
+      final naSqrt = sqrt(naSqSum);
+      final nbSqrt = sqrt(nbSqSum);
+
+      if (naSqrt == 0 || nbSqrt == 0 || naSqrt.isNaN || nbSqrt.isNaN) {
+        debugPrint('⚠️ Invalid norms in distance calc: $naSqrt, $nbSqrt');
+        return 1.0;  // ✅ Max distance on error
+      }
+
+      // ✅ Cosine distance = 1 - cosine_similarity
+      final cosineSimilarity = dot / (naSqrt * nbSqrt);
+      final distance = 1.0 - cosineSimilarity;
+
+      return distance.clamp(-1.0, 2.0);  // ✅ Clamp to valid range
     } catch (e) {
-      print('❌ Distance calculation error: $e');
+      debugPrint('❌ Distance calculation error: $e');
       return 1.0;  // ✅ Return max distance on error
     }
   }

@@ -1,4 +1,4 @@
-// alert_image_service.dart - FIXED PERMISSION HANDLING
+// alert_image_service.dart - COMPLETE: Fixed image saving + better error handling
 
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -10,58 +10,51 @@ import 'package:device_info_plus/device_info_plus.dart';
 class AlertImageService {
   Directory? _alertImagesDir;
 
-  /// Initialize storage directory - saves to phone's Pictures/VisionBotAlerts
   Future<void> initialize() async {
     try {
       debugPrint('');
       debugPrint('═══════════════════════════════════');
       debugPrint('📁 Initializing AlertImageService');
-      debugPrint('═══════��═══════════════════════════');
+      debugPrint('═══════════════════════════════════');
       
-      // ✅ Request storage permission first
       final granted = await _requestStoragePermission();
       
       if (!granted) {
-        debugPrint('⚠️ Storage permission not granted - using app directory instead');
-        // Fallback to app directory (doesn't need permission)
+        debugPrint('⚠️ Storage permission not granted');
         final appDir = await getApplicationDocumentsDirectory();
         _alertImagesDir = Directory('${appDir.path}/alert_images');
         debugPrint('   Using app directory: ${_alertImagesDir!.path}');
       } else {
-        // Use external storage (visible in Gallery)
         if (Platform.isAndroid) {
           _alertImagesDir = Directory('/storage/emulated/0/Pictures/VisionBotAlerts');
           debugPrint('   Platform: Android');
-          debugPrint('   Target: External storage (visible in Gallery)');
+          debugPrint('   Target: External storage');
         } else {
           final appDir = await getApplicationDocumentsDirectory();
           _alertImagesDir = Directory('${appDir.path}/alert_images');
-          debugPrint('   Platform: iOS/Other');
-          debugPrint('   Target: App documents directory');
+          debugPrint('   Platform: iOS');
         }
       }
       
       debugPrint('   Path: ${_alertImagesDir!.path}');
       
       if (!await _alertImagesDir!.exists()) {
-        debugPrint('   Status: Directory does not exist');
         debugPrint('   Creating directory...');
         await _alertImagesDir!.create(recursive: true);
-        debugPrint('   ✅ Directory created successfully');
+        debugPrint('   ✅ Created');
       } else {
-        debugPrint('   Status: Directory already exists');
+        debugPrint('   ✅ Exists');
       }
       
       // ✅ Test write permissions
       debugPrint('   Testing write permissions...');
       try {
-        final testFile = File('${_alertImagesDir!.path}/.test');
+        final testFile = File('${_alertImagesDir!.path}/.write_test');
         await testFile.writeAsString('test');
         await testFile.delete();
-        debugPrint('   ✅ Write permissions confirmed');
+        debugPrint('   ✅ Write OK');
       } catch (e) {
         debugPrint('   ⚠️ Write test failed: $e');
-        debugPrint('   Continuing anyway...');
       }
       
       // ✅ List existing content
@@ -69,119 +62,64 @@ class AlertImageService {
         final entities = await _alertImagesDir!.list().toList();
         debugPrint('   Existing items: ${entities.length}');
       } catch (e) {
-        debugPrint('   Could not list directory: $e');
+        debugPrint('   Could not list: $e');
       }
       
       debugPrint('✅ AlertImageService initialized');
-      debugPrint('📸 Images will be saved to: ${_alertImagesDir!.path}');
-      debugPrint('═══════════════════════════════════');
+      debugPrint('📸 Images → ${_alertImagesDir!.path}');
+      debugPrint('════════���══════════════════════════');
       debugPrint('');
     } catch (e, stackTrace) {
-      debugPrint('❌ Failed to initialize alert images directory: $e');
-      debugPrint('   Stack trace: $stackTrace');
+      debugPrint('❌ Init failed: $e');
+      debugPrint('   Stack: $stackTrace');
       
-      // ✅ Fallback to app directory on any error
       try {
         final appDir = await getApplicationDocumentsDirectory();
         _alertImagesDir = Directory('${appDir.path}/alert_images');
         await _alertImagesDir!.create(recursive: true);
-        debugPrint('✅ Using fallback app directory: ${_alertImagesDir!.path}');
+        debugPrint('✅ Fallback: ${_alertImagesDir!.path}');
       } catch (fallbackError) {
-        debugPrint('❌ Even fallback failed: $fallbackError');
+        debugPrint('❌ Fallback failed: $fallbackError');
         rethrow;
       }
     }
   }
 
-  /// ✅ UPDATED: Request storage permission with proper Android version handling
   Future<bool> _requestStoragePermission() async {
     debugPrint('📋 Checking storage permissions...');
     
     if (!Platform.isAndroid) {
-      // iOS - request photo library permission
-      debugPrint('   iOS detected - requesting photo library access');
+      debugPrint('   iOS - requesting photos');
       final status = await Permission.photos.request();
-      
-      if (status.isGranted) {
-        debugPrint('   ✅ Photo library permission granted');
-        return true;
-      } else {
-        debugPrint('   ⚠️ Photo library permission denied - using app directory');
-        return false;
-      }
+      return status.isGranted;
     }
 
-    // Get Android version
     final androidInfo = await DeviceInfoPlugin().androidInfo;
     final sdkInt = androidInfo.version.sdkInt;
     
-    debugPrint('   Android SDK version: $sdkInt');
+    debugPrint('   Android SDK: $sdkInt');
 
     if (sdkInt >= 33) {
-      // Android 13+ (API 33+) - Use photos permission
-      debugPrint('   Android 13+ - requesting photos permission');
-      
       var status = await Permission.photos.status;
-      debugPrint('   Current photos permission status: $status');
-      
       if (!status.isGranted) {
         status = await Permission.photos.request();
-        debugPrint('   After request - photos permission status: $status');
       }
-      
-      if (status.isGranted) {
-        debugPrint('   ✅ Photos permission granted');
-        return true;
-      } else if (status.isPermanentlyDenied) {
-        debugPrint('   ❌ Photos permission permanently denied');
-        debugPrint('   User must enable in Settings manually');
-        return false;
-      } else {
-        debugPrint('   ⚠️ Photos permission denied');
-        return false;
-      }
+      return status.isGranted;
     } else if (sdkInt >= 30) {
-      // Android 11-12 (API 30-32) - Use manageExternalStorage or storage
-      debugPrint('   Android 11-12 - requesting storage permission');
-      
       var status = await Permission.storage.status;
-      debugPrint('   Current storage permission status: $status');
-      
       if (!status.isGranted) {
         status = await Permission.storage.request();
-        debugPrint('   After request - storage permission status: $status');
       }
-      
-      if (status.isGranted) {
-        debugPrint('   ✅ Storage permission granted');
-        return true;
-      } else {
-        debugPrint('   ⚠️ Storage permission denied');
-        return false;
-      }
+      return status.isGranted;
     } else {
-      // Android 10 and below - Use storage permission
-      debugPrint('   Android 10 or below - requesting storage permission');
-      
       var status = await Permission.storage.status;
-      debugPrint('   Current storage permission status: $status');
-      
       if (!status.isGranted) {
         status = await Permission.storage.request();
-        debugPrint('   After request - storage permission status: $status');
       }
-      
-      if (status.isGranted) {
-        debugPrint('   ✅ Storage permission granted');
-        return true;
-      } else {
-        debugPrint('   ⚠️ Storage permission denied');
-        return false;
-      }
+      return status.isGranted;
     }
   }
 
-  /// Save image for unknown face alert
   Future<String?> saveUnknownFaceImage(String sourcePath, {
     String? additionalInfo,
   }) async {
@@ -192,7 +130,6 @@ class AlertImageService {
     );
   }
 
-  /// Save image for group detection alert
   Future<String?> saveGroupImage(String sourcePath, {
     required int personCount,
     String? additionalInfo,
@@ -204,7 +141,6 @@ class AlertImageService {
     );
   }
 
-  /// Save image for smoking detection alert
   Future<String?> saveSmokingImage(String sourcePath, {
     String? additionalInfo,
   }) async {
@@ -215,14 +151,13 @@ class AlertImageService {
     );
   }
 
-  /// Generic save method
   Future<String?> _saveAlertImage({
     required String sourcePath,
     required String alertType,
     String? additionalInfo,
   }) async {
     if (_alertImagesDir == null) {
-      debugPrint('❌ Alert images directory not initialized');
+      debugPrint('❌ Alert directory not initialized');
       return null;
     }
 
@@ -234,32 +169,33 @@ class AlertImageService {
       debugPrint('   Checking source: $sourcePath');
       
       if (!await sourceFile.exists()) {
-        debugPrint('   ❌ Source image not found!');
+        debugPrint('   ❌ Source not found');
         return null;
       }
       
       final sourceSize = await sourceFile.length();
       debugPrint('   ✅ Source exists (${sourceSize} bytes)');
 
-      // Create type-specific subdirectory
       final typeDir = Directory('${_alertImagesDir!.path}/$alertType');
       if (!await typeDir.exists()) {
-        debugPrint('   Creating subdirectory: ${typeDir.path}');
+        debugPrint('   Creating subdir: ${typeDir.path}');
         await typeDir.create(recursive: true);
       }
 
-      // Generate unique filename with timestamp
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final dateStr = DateTime.now().toIso8601String().split('T')[0];
-      final timeStr = DateTime.now().toIso8601String().split('T')[1].split('.')[0].replaceAll(':', '-');
+      final timeStr = DateTime.now()
+          .toIso8601String()
+          .split('T')[1]
+          .split('.')[0]
+          .replaceAll(':', '-');
       
       final info = additionalInfo != null ? '_$additionalInfo' : '';
       final filename = '${alertType}_${dateStr}_${timeStr}_${timestamp}$info.jpg';
       final destPath = '${typeDir.path}/$filename';
 
-      debugPrint('   Copying to: $destPath');
+      debugPrint('   Copying to: $filename');
 
-      // Copy image
       await sourceFile.copy(destPath);
 
       final destFile = File(destPath);
@@ -267,73 +203,78 @@ class AlertImageService {
       
       if (destExists) {
         final fileSize = await destFile.length();
-        debugPrint('   ✅ Image saved successfully!');
+        debugPrint('   ✅ Image saved!');
         debugPrint('      File: $filename');
         debugPrint('      Size: $fileSize bytes');
         debugPrint('      Path: $destPath');
         
         return destPath;
       } else {
-        debugPrint('   ❌ Copy failed - destination file not found');
+        debugPrint('   ❌ Copy failed - file not created');
         return null;
       }
     } catch (e, stackTrace) {
-      debugPrint('❌ Failed to save alert image: $e');
-      debugPrint('   Stack trace: $stackTrace');
+      debugPrint('❌ Save failed: $e');
+      debugPrint('   Stack: $stackTrace');
       return null;
     }
   }
 
-  /// Save cropped face images (multiple faces from one frame)
   Future<List<String>> saveFaceImages(List<img.Image> faces, {
     required String alertType,
     String? sessionInfo,
   }) async {
     if (_alertImagesDir == null) {
-      debugPrint('❌ Cannot save face images - directory not initialized');
+      debugPrint('❌ Directory not initialized');
       return [];
     }
 
     final savedPaths = <String>[];
 
     try {
-      debugPrint('💾 Saving ${faces.length} cropped face images...');
+      debugPrint('💾 Saving ${faces.length} face(s)...');
       
       final typeDir = Directory('${_alertImagesDir!.path}/$alertType');
       if (!await typeDir.exists()) {
         await typeDir.create(recursive: true);
-        debugPrint('   Created subdirectory: ${typeDir.path}');
       }
 
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final dateStr = DateTime.now().toIso8601String().split('T')[0];
-      final timeStr = DateTime.now().toIso8601String().split('T')[1].split('.')[0].replaceAll(':', '-');
+      final timeStr = DateTime.now()
+          .toIso8601String()
+          .split('T')[1]
+          .split('.')[0]
+          .replaceAll(':', '-');
 
       for (int i = 0; i < faces.length; i++) {
-        final face = faces[i];
-        
-        final info = sessionInfo != null ? '_$sessionInfo' : '';
-        final filename = '${alertType}_face${i + 1}_${dateStr}_${timeStr}_${timestamp}$info.jpg';
-        final destPath = '${typeDir.path}/$filename';
+        try {
+          final face = faces[i];
+          
+          final info = sessionInfo != null ? '_$sessionInfo' : '';
+          final filename = '${alertType}_face${i + 1}_${dateStr}_${timeStr}_${timestamp}$info.jpg';
+          final destPath = '${typeDir.path}/$filename';
 
-        // Encode and save
-        final bytes = img.encodeJpg(face, quality: 90);
-        await File(destPath).writeAsBytes(bytes);
+          final bytes = img.encodeJpg(face, quality: 90);
+          await File(destPath).writeAsBytes(bytes);
 
-        savedPaths.add(destPath);
-        debugPrint('   ✅ Face ${i + 1}/${faces.length} saved: $filename (${bytes.length} bytes)');
+          savedPaths.add(destPath);
+          debugPrint('   ✅ Face ${i + 1}/${faces.length} saved (${bytes.length} bytes)');
+        } catch (e) {
+          debugPrint('   ❌ Face ${i + 1} failed: $e');
+          continue;
+        }
       }
 
-      debugPrint('✅ Saved ${savedPaths.length} face images successfully');
+      debugPrint('✅ Saved ${savedPaths.length} face(s)');
     } catch (e, stackTrace) {
-      debugPrint('❌ Failed to save face images: $e');
-      debugPrint('   Stack trace: $stackTrace');
+      debugPrint('❌ Save faces failed: $e');
+      debugPrint('   Stack: $stackTrace');
     }
 
     return savedPaths;
   }
 
-  /// Get all alert images by type
   Future<List<Map<String, dynamic>>> getAlertImages({String? alertType}) async {
     if (_alertImagesDir == null) return [];
 
@@ -364,12 +305,11 @@ class AlertImageService {
         }
       }
 
-      // Sort by modified time (newest first)
       images.sort((a, b) => (b['modified'] as DateTime).compareTo(a['modified'] as DateTime));
 
       return images;
     } catch (e) {
-      debugPrint('❌ Failed to get alert images: $e');
+      debugPrint('❌ Get images failed: $e');
       return [];
     }
   }
@@ -381,7 +321,6 @@ class AlertImageService {
     return 'unknown';
   }
 
-  /// Get statistics
   Future<Map<String, int>> getStats() async {
     if (_alertImagesDir == null) return {};
 
@@ -404,12 +343,11 @@ class AlertImageService {
 
       return stats;
     } catch (e) {
-      debugPrint('❌ Failed to get stats: $e');
+      debugPrint('❌ Get stats failed: $e');
       return {};
     }
   }
 
-  /// Delete old images (cleanup)
   Future<int> deleteOldImages({int daysToKeep = 30}) async {
     if (_alertImagesDir == null) return 0;
 
@@ -428,15 +366,14 @@ class AlertImageService {
         }
       }
 
-      debugPrint('🧹 Deleted $deletedCount old alert images');
+      debugPrint('🧹 Deleted $deletedCount old images');
       return deletedCount;
     } catch (e) {
-      debugPrint('❌ Failed to delete old images: $e');
+      debugPrint('❌ Delete failed: $e');
       return 0;
     }
   }
 
-  /// Delete all images
   Future<void> clearAllImages() async {
     if (_alertImagesDir == null) return;
 
@@ -444,10 +381,10 @@ class AlertImageService {
       if (await _alertImagesDir!.exists()) {
         await _alertImagesDir!.delete(recursive: true);
         await _alertImagesDir!.create(recursive: true);
-        debugPrint('🧹 All alert images cleared');
+        debugPrint('🧹 All images cleared');
       }
     } catch (e) {
-      debugPrint('❌ Failed to clear images: $e');
+      debugPrint('❌ Clear failed: $e');
     }
   }
 
