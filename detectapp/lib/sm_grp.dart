@@ -1,4 +1,4 @@
-// sm_grp.dart - FIXED: Better multi-person detection
+// sm_grp.dart - COMPLETE: Fixed YOLO to prevent double-counting
 
 import 'dart:async';
 import 'dart:typed_data';
@@ -76,7 +76,10 @@ class MultiDetectorService {
 
   Future<void> initialize() async {
     try {
-      debugPrint('🔧 MultiDetectorService: Loading YOLO...');
+      debugPrint('');
+      debugPrint('═══════════════════════════════════');
+      debugPrint('🔧 MultiDetectorService: Loading YOLO');
+      debugPrint('═══════════════════════════════════');
 
       final opt = InterpreterOptions()..threads = 2;
 
@@ -88,17 +91,20 @@ class MultiDetectorService {
         
         final inputShape = _yolo!.getInputTensor(0).shape;
         final outputShape = _yolo!.getOutputTensor(0).shape;
+        
         debugPrint('✅ YOLO loaded (${_yoloModelData!.length} bytes)');
-        debugPrint('   Input shape: $inputShape');
-        debugPrint('   Output shape: $outputShape');
+        debugPrint('   Input: ${inputShape[1]}x${inputShape[2]}');
+        debugPrint('   Output: ${outputShape[1]}x${outputShape[2]}');
       } catch (e) {
         debugPrint('❌ YOLO load failed: $e');
         return;
       }
 
       _isInitialized = true;
-
-      debugPrint('✅ MultiDetectorService ready (threshold: $groupThreshold)');
+      debugPrint('✅ MultiDetectorService ready');
+      debugPrint('   Group threshold: $groupThreshold');
+      debugPrint('═══════════════════════════════════');
+      debugPrint('');
     } catch (e) {
       debugPrint('❌ Init failed: $e');
     }
@@ -106,6 +112,7 @@ class MultiDetectorService {
 
   void setGroupThreshold(int threshold) {
     groupThreshold = threshold;
+    debugPrint('📊 Group threshold: $threshold');
   }
 
   int _frameCount = 0;
@@ -113,7 +120,7 @@ class MultiDetectorService {
   void detectAllAsync(CameraImage image) {
     if (!_isInitialized || _yoloModelData == null) {
       if (_frameCount % 300 == 0) {
-        debugPrint('⚠️ Cannot detect: initialized=$_isInitialized, modelData=${_yoloModelData != null}');
+        debugPrint('⚠️ YOLO not ready: init=$_isInitialized, model=${_yoloModelData != null}');
       }
       return;
     }
@@ -123,13 +130,12 @@ class MultiDetectorService {
 
     _frameCount++;
     
-    if (_frameCount % 60 == 0) {
-      debugPrint('🎯 Frame $_frameCount - Starting YOLO detection');
-    }
-    
+    // ✅ Process every 60 frames (~1 FPS at 60 FPS camera)
     if (_frameCount % 60 != 0) return;
 
     _busy = true;
+    
+    debugPrint('🎯 Frame $_frameCount - YOLO detection');
 
     compute(_runDetectionInCompute, _DetectionData(
       yPlane: image.planes[0].bytes,
@@ -143,7 +149,7 @@ class MultiDetectorService {
       yoloModelData: _yoloModelData!,
       groupThreshold: groupThreshold,
     )).then((result) {
-      debugPrint('✅ YOLO completed: $result');
+      debugPrint('✅ YOLO result: $result');
       _last = result;
       _busy = false;
     }).catchError((e) {
@@ -176,6 +182,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
       ),
     );
 
+    // ✅ YUV to RGB conversion
     for (int y = 0; y < inputSize; y += 4) {
       final srcY = (y * data.height ~/ inputSize).clamp(0, data.height - 1);
       
@@ -237,12 +244,12 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
   }
 }
 
-// ✅ FIXED: Lower NMS IOU threshold for better multi-person detection
+// ✅ FIXED: Better person counting - prevent double counting
 int _countPersons(List output) {
   final preds = output[0] as List<List<double>>;
-
   const int inputSize = 640;
 
+  // ✅ STEP 1: Analyze raw output
   double maxPersonScore = 0.0;
   int bestIdx = -1;
   
@@ -254,33 +261,38 @@ int _countPersons(List output) {
     }
   }
 
-  debugPrint('🔍 YOLO Raw Output Analysis:');
-  debugPrint('   Max person (class 0) score: ${maxPersonScore.toStringAsFixed(4)}');
+  debugPrint('🔍 YOLO Analysis:');
+  debugPrint('   Max score: ${maxPersonScore.toStringAsFixed(4)}');
   
   if (bestIdx >= 0) {
     final rawCx = preds[0][bestIdx];
     final rawCy = preds[1][bestIdx];
     final rawBw = preds[2][bestIdx];
     final rawBh = preds[3][bestIdx];
-    debugPrint('   Best person: score=${maxPersonScore.toStringAsFixed(4)}');
     
     if (rawCx <= 1.5 && rawCy <= 1.5 && rawBw <= 1.5 && rawBh <= 1.5) {
-      debugPrint('   📐 Format: NORMALIZED (0-1)');
+      debugPrint('   Format: NORMALIZED');
     } else {
-      debugPrint('   📐 Format: PIXEL coordinates');
+      debugPrint('   Format: PIXEL');
     }
   }
   
+  // ✅ STEP 2: Collect boxes with HIGHER confidence threshold
   final boxes = <_Box>[];
   int candidateCount = 0;
   int filteredSmall = 0;
+  int filteredLowConf = 0;
 
-  const double CONFIDENCE_THRESHOLD = 0.15;
+  // ✅ INCREASED: 0.25 (was 0.15) - More strict = less false positives
+  const double CONFIDENCE_THRESHOLD = 0.25;
 
   for (int i = 0; i < 8400; i++) {
     final personScore = preds[4][i];
     
-    if (personScore < CONFIDENCE_THRESHOLD) continue;
+    if (personScore < CONFIDENCE_THRESHOLD) {
+      filteredLowConf++;
+      continue;
+    }
     
     candidateCount++;
 
@@ -289,6 +301,7 @@ int _countPersons(List output) {
     double bw = preds[2][i];
     double bh = preds[3][i];
 
+    // ✅ Auto-detect format
     if (cx < 2.0 && cy < 2.0 && bw < 2.0 && bh < 2.0) {
       cx *= inputSize;
       cy *= inputSize;
@@ -297,10 +310,11 @@ int _countPersons(List output) {
     }
 
     if (candidateCount <= 3) {
-      debugPrint('   Candidate $candidateCount: score=${personScore.toStringAsFixed(3)}, size=${bw.toStringAsFixed(1)}x${bh.toStringAsFixed(1)}');
+      debugPrint('   Candidate $candidateCount: score=${personScore.toStringAsFixed(3)}, size=${bw.toStringAsFixed(0)}x${bh.toStringAsFixed(0)}');
     }
 
-    if (bh < 20 || bw < 10) {
+    // ✅ INCREASED minimum size: 60px (was 20px) - Filter out noise
+    if (bh < 60 || bw < 30) {
       filteredSmall++;
       continue;
     }
@@ -314,15 +328,18 @@ int _countPersons(List output) {
     ));
   }
 
-  debugPrint('   Candidates: $candidateCount, filtered: $filteredSmall, kept: ${boxes.length}');
+  debugPrint('   Candidates: $candidateCount');
+  debugPrint('   Filtered (low conf): $filteredLowConf');
+  debugPrint('   Filtered (small): $filteredSmall');
+  debugPrint('   Kept: ${boxes.length}');
 
-  // ✅ FIXED: Lower NMS threshold from 0.45 to 0.30 for better multi-person
-  final count = _nms(boxes, 0.30);
+  // ✅ INCREASED NMS IOU: 0.55 (was 0.30) - More aggressive overlap removal
+  final count = _nms(boxes, 0.55);
   
   if (count > 0) {
-    debugPrint('   🎯 DETECTED $count PERSON(S)!');
+    debugPrint('   ✅ After NMS: $count person(s)');
   } else {
-    debugPrint('   ❌ No persons after NMS');
+    debugPrint('   ❌ No persons detected');
   }
   
   return count;
@@ -343,6 +360,9 @@ int _nms(List<_Box> boxes, double iouThr) {
     }
     if (ok) kept.add(b);
   }
+  
+  debugPrint('   NMS removed: ${boxes.length - kept.length}');
+  
   return kept.length;
 }
 
