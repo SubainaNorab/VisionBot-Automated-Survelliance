@@ -1,4 +1,4 @@
-// surveillance_controller.dart - FIXED: Proper YOLO state management
+// surveillance_controller.dart - FIXED: Use face verification for people count
 
 import 'dart:async';
 import 'dart:io';
@@ -100,11 +100,6 @@ class SurveillanceController {
   
   Timer? _imageCleanupTimer;
 
-  // ✅ NEW: Track latest YOLO detection
-  int _latestYoloPeopleCount = 0;
-  bool _latestYoloGroupDetected = false;
-  bool _latestYoloSmokingDetected = false;
-
   Stream<SurveillanceState> get stateStream => _stateController.stream;
   SurveillanceState get currentState => _state;
   CameraService get camera => _camera;
@@ -131,12 +126,21 @@ class SurveillanceController {
       debugPrint('📱 Initializing SurveillanceController');
       debugPrint('═══════════════════════════════════');
 
-      await Future.wait([
-        _verifier.initialize(),
-        _multi.initialize(),
-        _camera.initialize(preferred: preferredLens),
-        _imageService.initialize(),
-      ]);
+      debugPrint('1️⃣ Initializing verifier...');
+      await _verifier.initialize();
+      debugPrint('   ✅ Verifier ready');
+      
+      debugPrint('2️⃣ Initializing YOLO detector...');
+      await _multi.initialize();
+      debugPrint('   ✅ YOLO ready');
+      
+      debugPrint('3️⃣ Initializing camera...');
+      await _camera.initialize(preferred: preferredLens);
+      debugPrint('   ✅ Camera ready');
+      
+      debugPrint('4️⃣ Initializing image service...');
+      await _imageService.initialize();
+      debugPrint('   ✅ Image service ready');
 
       debugPrint('✅ All services initialized');
 
@@ -154,7 +158,8 @@ class SurveillanceController {
       debugPrint('✅ SurveillanceController initialized');
       debugPrint('📁 Alert path: ${_imageService.storagePath}');
       debugPrint('📏 Face distance: ${_detector.minFaceWidth}-${_detector.maxFaceWidth}px');
-      debugPrint('🎯 YOLO updates every 60 frames');
+      debugPrint('👥 People count: Based on FACE VERIFICATION');
+      debugPrint('🎯 Group detection: 1+ person = GROUP');
       debugPrint('═══════════════════════════════════');
       debugPrint('');
 
@@ -254,26 +259,29 @@ class SurveillanceController {
       if (!mounted) return;
 
       try {
-        // ✅ FIXED: Get LATEST YOLO result from MultiDetectorService
-        final latestDetection = _multi.lastResult;
+        // ✅ FIXED: Use FACE VERIFICATION count (not YOLO)
+        int verificationPeople = _lastVerifiedPeopleCount;
         
-        _latestYoloPeopleCount = latestDetection.personCount;
-        _latestYoloGroupDetected = latestDetection.groupDetected;
-        _latestYoloSmokingDetected = latestDetection.smokingDetected;
+        // ✅ CHANGED: Group threshold = 1 person (anyone = group alert)
+        bool isGroup = verificationPeople >= 1;
+        
+        // ✅ Get smoking from YOLO
+        bool hasSmoking = _multi.lastResult.smokingDetected;
 
-        // ✅ Always update state with latest YOLO values
+        debugPrint('📊 Status: people=$verificationPeople, group=$isGroup, smoke=$hasSmoking');
+
+        // ✅ ALWAYS update state
         _updateState(_state.copyWith(
-          peopleCount: _latestYoloPeopleCount,
-          groupDetected: _latestYoloGroupDetected,
-          smokingDetected: _latestYoloSmokingDetected,
-          detectionStatus: 'People: $_latestYoloPeopleCount | Group: ${_latestYoloGroupDetected ? "YES" : "NO"} | Smoke: ${_latestYoloSmokingDetected ? "YES" : "NO"}',
+          peopleCount: verificationPeople,
+          groupDetected: isGroup,
+          smokingDetected: hasSmoking,
+          detectionStatus: 'People: $verificationPeople | Group: ${isGroup ? "YES" : "NO"} | Smoke: ${hasSmoking ? "YES" : "NO"}',
         ));
 
-        // ✅ Handle alerts based on YOLO detection
         _handleDetectionAlerts(
-          latestDetection,
-          _latestYoloPeopleCount,
-          _latestYoloGroupDetected,
+          _multi.lastResult,
+          verificationPeople,
+          isGroup,
         );
       } catch (e) {
         debugPrint('⚠️ Polling error: $e');
@@ -308,7 +316,7 @@ class SurveillanceController {
 
   void _handleDetectionAlerts(
     DetectionResult det,
-    int yoloPeople,
+    int verificationPeople,
     bool isGroup,
   ) {
     if (!mounted) return;
@@ -317,11 +325,12 @@ class SurveillanceController {
       final lensName =
           _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
+      // ✅ Group alert when 1+ person detected
       if (isGroup && !_lastGroupState) {
-        debugPrint('🚨 GROUP DETECTED: $yoloPeople people');
+        debugPrint('🚨 GROUP DETECTED: $verificationPeople people');
         
         if (_currentFramePath != null) {
-          _saveGroupAlertAsync(yoloPeople, lensName);
+          _saveGroupAlertAsync(verificationPeople, lensName);
         }
       }
       _lastGroupState = isGroup;
@@ -334,7 +343,7 @@ class SurveillanceController {
         }
       }
       _lastSmokeState = det.smokingDetected;
-    } catch (e, st) {
+    } catch (e) {
       debugPrint('❌ Alert error: $e');
     }
   }
@@ -368,7 +377,7 @@ class SurveillanceController {
         imagePath: savedImagePath,
       );
       debugPrint('✅ Group alert saved');
-    } catch (e, st) {
+    } catch (e) {
       debugPrint('❌ Group alert error: $e');
     }
   }
@@ -388,7 +397,7 @@ class SurveillanceController {
         imagePath: savedImagePath,
       );
       debugPrint('✅ Smoking alert saved');
-    } catch (e, st) {
+    } catch (e) {
       debugPrint('❌ Smoking alert error: $e');
     }
   }
@@ -497,9 +506,6 @@ class SurveillanceController {
       }
       
       debugPrint('📊 Distance: ${validFaces.length} good, $_facesTooFar far, $_facesTooClose close');
-      
-      _lastVerifiedPeopleCount = totalDetectedFaces;
-      _lastVerificationTime = DateTime.now();
       
       if (validFaces.isEmpty) {
         String reason = '';
@@ -616,6 +622,12 @@ class SurveillanceController {
 
       _lastKnownCount = knownNames.length;
       _lastUnknownCount = unknownCount;
+      
+      // ✅ IMPORTANT: Update total people count from verification
+      _lastVerifiedPeopleCount = knownNames.length + unknownCount;
+      _lastVerificationTime = DateTime.now();
+
+      debugPrint('📊 Verification: ${knownNames.length} known + $unknownCount unknown = $_lastVerifiedPeopleCount total');
 
       if (hasUnknownFace && unknownCount > 0) {
         debugPrint('🚨 SAVING UNKNOWN FACE ALERT');
@@ -673,7 +685,7 @@ class SurveillanceController {
           lastMatch: knownList.isNotEmpty ? knownList.join(', ') : '',
         ));
       }
-    } catch (e, st) {
+    } catch (e) {
       debugPrint('❌ Process results: $e');
     }
   }
@@ -738,7 +750,7 @@ class SurveillanceController {
       }
 
       debugPrint('📷 Camera switched');
-    } catch (e, st) {
+    } catch (e) {
       debugPrint('❌ Switch failed: $e');
       if (mounted) {
         _updateState(_state.copyWith(faceStatus: 'Switch failed'));

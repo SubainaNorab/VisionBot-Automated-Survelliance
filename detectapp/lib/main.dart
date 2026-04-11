@@ -1,4 +1,4 @@
-// main.dart - FIXED: Show YOLO people/group count on display
+// main.dart - FIXED: Display people count and group detection correctly
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -344,7 +344,7 @@ class _CompactStatusPanel extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // ✅ Face verification status
+          // Face verification status
           Row(
             children: [
               Icon(Icons.face, color: Colors.blueAccent, size: 14),
@@ -369,7 +369,7 @@ class _CompactStatusPanel extends StatelessWidget {
           ),
           const SizedBox(height: 8),
 
-          // ✅ Auto verify toggle
+          // Auto verify toggle
           Row(
             children: [
               Container(
@@ -454,7 +454,7 @@ class _YoloDetectionDisplay extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ✅ People count (YOLO detection)
+          // ✅ People count (Face verification detection)
           Row(
             children: [
               Icon(Icons.people, color: Colors.orangeAccent, size: 18),
@@ -474,7 +474,7 @@ class _YoloDetectionDisplay extends StatelessWidget {
           // ✅ Group + Smoke status
           Row(
             children: [
-              // Group detection
+              // Group detection (1+ person = GROUP)
               Expanded(
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
