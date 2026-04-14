@@ -25,6 +25,7 @@ Future<void> _requestAllPermissions() async {
       Permission.camera,
       Permission.storage,
       Permission.photos,
+      Permission.location,   
     ].request();
     
     debugPrint('📋 Permission results:');

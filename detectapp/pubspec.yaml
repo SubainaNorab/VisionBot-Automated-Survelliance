@@ -18,7 +18,8 @@ dependencies:
   cloud_firestore: ^4.13.6
   firebase_core: ^2.24.2
   permission_handler: ^11.0.1
-  device_info_plus: ^10.0.1  # ✅ NEW - For Android version detection
+  device_info_plus: ^10.0.1
+  geolocator: ^11.0.0
   
   cupertino_icons: ^1.0.2
 

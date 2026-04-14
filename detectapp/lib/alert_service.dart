@@ -16,40 +16,6 @@ class AlertService {
   final int _groupCooldownMs = 5000;
   final int _smokeCooldownMs = 3000;
 
-  Future<void> createUnknownAlert({
-    required double threshold,
-    required String lens,
-    String note = '',
-    String? imagePath,
-    List<String>? faceImagePaths,
-  }) async {
-    final now = DateTime.now();
-
-    if (_lastAlertAt != null) {
-      final diff = now.difference(_lastAlertAt!).inMilliseconds;
-      if (diff < _faceCooldownMs) {
-        return;
-      }
-    }
-
-    _lastAlertAt = now;
-
-    await _db.collection(_collection).add({
-      'type': 'unknown_face',
-      'created_at': FieldValue.serverTimestamp(),
-      'created_at_local': now.toIso8601String(),
-      'threshold': threshold,
-      'lens': lens,
-      'note': note,
-      'image_path': imagePath,
-      'face_image_paths': faceImagePaths,
-      'has_image': imagePath != null,
-      'face_count': faceImagePaths?.length ?? 0,
-    });
-    
-    debugPrint('✅ Unknown face alert saved${imagePath != null ? ' with image' : ''}');
-  }
-
   Future<void> createGroupAlert({
     required int personCount,
     required String lens,
@@ -75,10 +41,58 @@ class AlertService {
         'image_path': imagePath,
         'has_image': imagePath != null,
       });
-      debugPrint('✅ Group alert saved (count: $personCount)${imagePath != null ? ' with image' : ''}');
+      debugPrint(
+          '✅ Group alert saved (count: $personCount)${imagePath != null ? ' with image' : ''}');
     } catch (e) {
       debugPrint('❌ Failed to save group alert: $e');
     }
+  }
+
+  Future<void> createUnknownAlert({
+    required double threshold,
+    required String lens,
+    String note = '',
+    String? imagePath,
+    List<String>? faceImagePaths,
+    double? latitude, // ADD THIS
+    double? longitude, // ADD THIS
+    String? locationName, // ADD THIS (optional reverse geocode)
+  }) async {
+    final now = DateTime.now();
+
+    if (_lastAlertAt != null) {
+      final diff = now.difference(_lastAlertAt!).inMilliseconds;
+      if (diff < _faceCooldownMs) return;
+    }
+
+    _lastAlertAt = now;
+
+    await _db.collection(_collection).add({
+      'type': 'unknown_face',
+      'created_at': FieldValue.serverTimestamp(),
+      'created_at_local': now.toIso8601String(),
+      'threshold': threshold,
+      'lens': lens,
+      'note': note,
+      'image_path': imagePath,
+      'face_image_paths': faceImagePaths,
+      'has_image': imagePath != null,
+      'face_count': faceImagePaths?.length ?? 0,
+      // ADD THESE FIELDS:
+      'location': (latitude != null && longitude != null)
+          ? {
+              'latitude': latitude,
+              'longitude': longitude,
+              'location_name': locationName ?? 'Unknown',
+              'timestamp': now.toIso8601String(),
+            }
+          : null,
+      'has_location': latitude != null && longitude != null,
+    });
+
+    debugPrint('✅ Unknown face alert saved'
+        '${imagePath != null ? " with image" : ""}'
+        '${latitude != null ? " at ($latitude, $longitude)" : ""}');
   }
 
   Future<void> createSmokingAlert({
@@ -104,7 +118,8 @@ class AlertService {
         'image_path': imagePath,
         'has_image': imagePath != null,
       });
-      debugPrint('🚬 Smoking alert saved${imagePath != null ? ' with image' : ''}');
+      debugPrint(
+          '🚬 Smoking alert saved${imagePath != null ? ' with image' : ''}');
     } catch (e) {
       debugPrint('❌ Failed to save smoking alert: $e');
     }
