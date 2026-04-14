@@ -1,4 +1,4 @@
-// main.dart - FIXED UI WITH VISIBLE AUTO-VERIFY TOGGLE
+// main.dart - FIXED: Display people count and group detection correctly
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -19,7 +19,7 @@ void main() async {
 
 Future<void> _requestAllPermissions() async {
   try {
-    debugPrint('🔐 Requesting all permissions...');
+    debugPrint('🔐 Requesting permissions...');
     
     Map<Permission, PermissionStatus> statuses = await [
       Permission.camera,
@@ -32,10 +32,6 @@ Future<void> _requestAllPermissions() async {
     statuses.forEach((permission, status) {
       debugPrint('   ${permission.toString()}: $status');
     });
-    
-    if (statuses[Permission.camera] != PermissionStatus.granted) {
-      debugPrint('⚠️ Camera permission not granted!');
-    }
     
   } catch (e) {
     debugPrint('❌ Permission request failed: $e');
@@ -114,19 +110,19 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
                 onPressed: () => _showDetectionSettings(context),
                 icon: const Icon(Icons.settings, size: 20),
                 tooltip: 'Detection Settings',
-                padding: EdgeInsets.all(8),
+                padding: const EdgeInsets.all(8),
               ),
               IconButton(
                 onPressed: _controller.switchCamera,
                 icon: const Icon(Icons.cameraswitch, size: 20),
                 tooltip: 'Switch Camera',
-                padding: EdgeInsets.all(8),
+                padding: const EdgeInsets.all(8),
               ),
               IconButton(
                 onPressed: state.processingFace ? null : _controller.verifyFace,
                 icon: const Icon(Icons.face, size: 20),
                 tooltip: 'Verify Face Now',
-                padding: EdgeInsets.all(8),
+                padding: const EdgeInsets.all(8),
               ),
             ],
           ),
@@ -149,7 +145,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
                       right: 8,
                       child: _LiveIndicator(),
                     ),
-                    // ✅ ADDED: Auto-verify status overlay
+                    // Auto-verify status
                     Positioned(
                       top: 8,
                       left: 8,
@@ -213,13 +209,13 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Adjust detection distance:',
+                'Adjust face detection distance:',
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
               ),
               const SizedBox(height: 16),
               
               ListTile(
-                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 title: const Text('Close Range (1-2m)', style: TextStyle(fontSize: 14)),
                 subtitle: const Text('Face: 100-400px', style: TextStyle(fontSize: 11)),
                 leading: const Icon(Icons.person, color: Colors.orange, size: 20),
@@ -241,7 +237,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: ListTile(
-                  contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   title: const Text('Medium Range (2-4m)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
                   subtitle: const Text('Face: 50-500px | RECOMMENDED', style: TextStyle(fontSize: 11, color: Colors.green)),
                   leading: const Icon(Icons.groups, color: Colors.green, size: 20),
@@ -259,7 +255,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
               ),
               
               ListTile(
-                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 title: const Text('Long Range (3-6m)', style: TextStyle(fontSize: 14)),
                 subtitle: const Text('Face: 30-600px', style: TextStyle(fontSize: 11)),
                 leading: const Icon(Icons.visibility, color: Colors.blue, size: 20),
@@ -349,7 +345,7 @@ class _CompactStatusPanel extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Face status
+          // Face verification status
           Row(
             children: [
               Icon(Icons.face, color: Colors.blueAccent, size: 14),
@@ -357,23 +353,26 @@ class _CompactStatusPanel extends StatelessWidget {
               Expanded(
                 child: Text(
                   state.faceStatus,
-                  style: TextStyle(color: Colors.blueAccent, fontSize: 11),
+                  style: const TextStyle(color: Colors.blueAccent, fontSize: 11),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
-
-          // Detection status
-          _CompactDetectionStatus(detectionStatus: state.detectionStatus),
           const SizedBox(height: 8),
 
-          // ✅ FIXED: Make toggle MORE VISIBLE
+          // ✅ YOLO Detection status (People + Group + Smoke)
+          _YoloDetectionDisplay(
+            peopleCount: state.peopleCount,
+            groupDetected: state.groupDetected,
+            smokingDetected: state.smokingDetected,
+          ),
+          const SizedBox(height: 8),
+
+          // Auto verify toggle
           Row(
             children: [
-              // Toggle with label
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
@@ -387,14 +386,11 @@ class _CompactStatusPanel extends StatelessWidget {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Transform.scale(
-                      scale: 1.0,  // ✅ Normal size (was 0.8)
-                      child: Switch(
-                        value: autoVerify,
-                        onChanged: onAutoVerifyChanged,
-                        activeColor: Colors.green,
-                        materialTapTargetSize: MaterialTapTargetSize.padded,
-                      ),
+                    Switch(
+                      value: autoVerify,
+                      onChanged: onAutoVerifyChanged,
+                      activeColor: Colors.green,
+                      materialTapTargetSize: MaterialTapTargetSize.padded,
                     ),
                     const SizedBox(width: 8),
                     Text(
@@ -402,7 +398,7 @@ class _CompactStatusPanel extends StatelessWidget {
                       style: TextStyle(
                         color: autoVerify ? Colors.green : Colors.grey,
                         fontWeight: FontWeight.bold,
-                        fontSize: 14,  // ✅ Larger text
+                        fontSize: 12,
                       ),
                     ),
                   ],
@@ -413,16 +409,16 @@ class _CompactStatusPanel extends StatelessWidget {
               
               // Manual verify button
               SizedBox(
-                height: 40,  // ✅ Taller button
+                height: 36,
                 child: ElevatedButton.icon(
                   onPressed: state.processingFace ? null : onVerifyPressed,
-                  icon: const Icon(Icons.face, size: 16),
+                  icon: const Icon(Icons.face, size: 14),
                   label: Text(
-                    state.processingFace ? 'Processing...' : 'Verify Now',
-                    style: TextStyle(fontSize: 12),
+                    state.processingFace ? 'Processing...' : 'Verify',
+                    style: const TextStyle(fontSize: 11),
                   ),
                   style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     visualDensity: VisualDensity.comfortable,
                   ),
                 ),
@@ -435,78 +431,117 @@ class _CompactStatusPanel extends StatelessWidget {
   }
 }
 
-class _CompactDetectionStatus extends StatelessWidget {
-  final String detectionStatus;
+class _YoloDetectionDisplay extends StatelessWidget {
+  final int peopleCount;
+  final bool groupDetected;
+  final bool smokingDetected;
 
-  const _CompactDetectionStatus({required this.detectionStatus});
+  const _YoloDetectionDisplay({
+    required this.peopleCount,
+    required this.groupDetected,
+    required this.smokingDetected,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final parts = detectionStatus.split('|').map((e) => e.trim()).toList();
-    
-    String peoplePart = '';
-    String groupPart = '';
-    String smokePart = '';
-    
-    for (final part in parts) {
-      if (part.startsWith('People:')) {
-        peoplePart = part;
-      } else if (part.startsWith('Group:')) {
-        groupPart = part;
-      } else if (part.startsWith('Smoke:')) {
-        smokePart = part;
-      }
-    }
-
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.black54,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.orangeAccent.withOpacity(0.3)),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.orangeAccent.withOpacity(0.5), width: 2),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (peoplePart.isNotEmpty)
-            Text(
-              peoplePart,
-              style: TextStyle(color: Colors.orangeAccent, fontSize: 10),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          
-          const SizedBox(height: 2),
-          
+          // ✅ People count (Face verification detection)
           Row(
             children: [
-              if (groupPart.isNotEmpty)
-                Expanded(
-                  child: Text(
-                    groupPart,
-                    style: TextStyle(
-                      color: groupPart.contains('YES') 
-                          ? Colors.redAccent 
-                          : Colors.grey,
-                      fontSize: 9,
-                    ),
-                  ),
-                ),
+              Icon(Icons.people, color: Colors.orangeAccent, size: 18),
               const SizedBox(width: 8),
-              if (smokePart.isNotEmpty)
-                Expanded(
-                  child: Text(
-                    smokePart,
-                    style: TextStyle(
-                      color: smokePart.contains('YES') 
-                          ? Colors.redAccent 
-                          : Colors.grey,
-                      fontSize: 9,
+              Text(
+                'People: $peopleCount',
+                style: const TextStyle(
+                  color: Colors.orangeAccent,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          
+          // ✅ Group + Smoke status
+          Row(
+            children: [
+              // Group detection (1+ person = GROUP)
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: groupDetected ? Colors.red.withOpacity(0.2) : Colors.grey.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: groupDetected ? Colors.redAccent : Colors.grey,
+                      width: 1,
                     ),
-                    overflow: TextOverflow.ellipsis,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.groups,
+                        color: groupDetected ? Colors.redAccent : Colors.grey,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Group: ${groupDetected ? "YES" : "NO"}',
+                        style: TextStyle(
+                          color: groupDetected ? Colors.redAccent : Colors.grey,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
+              ),
+              
+              const SizedBox(width: 8),
+              
+              // Smoking detection
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: smokingDetected ? Colors.red.withOpacity(0.2) : Colors.grey.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: smokingDetected ? Colors.redAccent : Colors.grey,
+                      width: 1,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.smoke_free,
+                        color: smokingDetected ? Colors.redAccent : Colors.grey,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Smoke: ${smokingDetected ? "YES" : "NO"}',
+                        style: TextStyle(
+                          color: smokingDetected ? Colors.redAccent : Colors.grey,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
         ],
