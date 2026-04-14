@@ -1,4 +1,4 @@
-// surveillance_controller.dart - MERGED: All fixes + location + original structure
+// surveillance_controller.dart - NO LOCAL STORAGE
 
 import 'dart:async';
 import 'dart:io';
@@ -12,8 +12,9 @@ import 'camera.dart';
 import 'face_detector.dart';
 import 'face_verification.dart';
 import 'alert_service.dart';
-import 'alert_image_service.dart';
 import 'sm_grp.dart';
+import 'image_uploader_service.dart';
+import 'supabase_service.dart';
 
 class SurveillanceState {
   final bool isBooting;
@@ -64,7 +65,6 @@ class SurveillanceController {
   final FaceDetectionService _detector = FaceDetectionService();
   final FaceVerificationService _verifier = FaceVerificationService();
   final AlertService _alertService = AlertService();
-  final AlertImageService _imageService = AlertImageService();
   final MultiDetectorService _multi;
 
   final StreamController<SurveillanceState> _stateController =
@@ -138,10 +138,6 @@ class SurveillanceController {
       debugPrint('3️⃣ Initializing camera...');
       await _camera.initialize(preferred: preferredLens);
       debugPrint('   ✅ Camera ready');
-      
-      debugPrint('4️⃣ Initializing image service...');
-      await _imageService.initialize();
-      debugPrint('   ✅ Image service ready');
 
       debugPrint('✅ All services initialized');
 
@@ -157,10 +153,10 @@ class SurveillanceController {
       ));
 
       debugPrint('✅ SurveillanceController initialized');
-      debugPrint('📁 Alert images path: ${_imageService.storagePath}');
       debugPrint('📏 Distance range: ${_detector.minFaceWidth}-${_detector.maxFaceWidth}px');
       debugPrint('👥 People count: Face Verification');
       debugPrint('📍 Location: Enabled for alerts');
+      debugPrint('☁️ Storage: Supabase Cloud Only');
       debugPrint('🎯 Group detection: 1+ person detected');
       debugPrint('═══════════════════════════════════');
       debugPrint('');
@@ -193,17 +189,15 @@ class SurveillanceController {
     debugPrint('📏 Distance thresholds: $minWidth-$maxWidth');
   }
 
-  // ✅ NEW: Get current location
+  /// Get current location
   Future<Position?> _getCurrentLocation() async {
     try {
-      // Check if location services are enabled
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         debugPrint('⚠️ Location services disabled');
         return null;
       }
 
-      // Check/request permission
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
@@ -298,16 +292,9 @@ class SurveillanceController {
       if (!mounted) return;
 
       try {
-        // ✅ FIXED: Use FACE VERIFICATION count for people detection
         int verificationPeople = _lastVerifiedPeopleCount;
-        
-        // ✅ CHANGED: Group = 1+ person (as per requirement)
         bool isGroup = verificationPeople >= 1;
-        
-        // ✅ Smoking from YOLO
         bool hasSmoking = _multi.lastResult.smokingDetected;
-
-        debugPrint('📊 Status: people=$verificationPeople, group=$isGroup, smoke=$hasSmoking');
 
         _updateState(_state.copyWith(
           peopleCount: verificationPeople,
@@ -363,7 +350,6 @@ class SurveillanceController {
       final lensName =
           _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
-      // ✅ Group alert when 1+ person detected
       if (isGroup && !_lastGroupState) {
         debugPrint('🚨 GROUP DETECTED: $verificationPeople people');
         
@@ -388,93 +374,86 @@ class SurveillanceController {
 
   void _saveGroupAlertAsync(int personCount, String lensName) {
     _saveGroupAlert(personCount, lensName).catchError((e) {
-      debugPrint('❌ Group alert: $e');
+      debugPrint('❌ Group alert error: $e');
     });
   }
 
   void _saveSmokingAlertAsync(String lensName) {
     _saveSmokingAlert(lensName).catchError((e) {
-      debugPrint('❌ Smoking alert: $e');
+      debugPrint('❌ Smoking alert error: $e');
     });
   }
 
+  /// Save group alert with Supabase upload
   Future<void> _saveGroupAlert(int personCount, String lensName) async {
     try {
-      String? savedImagePath;
+      String? imageUrl;
       
       if (_currentFramePath != null && await File(_currentFramePath!).exists()) {
-        savedImagePath = await _imageService.saveGroupImage(
-          _currentFramePath!,
-          personCount: personCount,
+        final result = await ImageUploaderService.saveAndUploadAlertImage(
+          sourcePath: _currentFramePath!,
+          alertType: 'group_detected',
+          additionalInfo: 'count_${personCount}',
         );
         
-        // ✅ Scan file so it appears in Gallery
-        if (savedImagePath != null) {
-          await _scanMediaFile(savedImagePath);
+        imageUrl = result['remote'];
+        
+        if (imageUrl != null) {
+          debugPrint('✅ Group image uploaded');
         }
       }
       
-      // ✅ Get location and save alert
       final position = await _getCurrentLocation();
       
       await _alertService.createGroupAlert(
         personCount: personCount,
         lens: lensName,
-        imagePath: savedImagePath,
+        imagePath: imageUrl,
         latitude: position?.latitude,
         longitude: position?.longitude,
         locationName: position != null
-            ? '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}'
+            ? '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}'
             : null,
       );
-      debugPrint('✅ Group alert saved with location');
+      debugPrint('✅ Group alert saved to Firebase');
     } catch (e, st) {
       debugPrint('❌ Group alert error: $e\n$st');
     }
   }
 
+  /// Save smoking alert with Supabase upload
   Future<void> _saveSmokingAlert(String lensName) async {
     try {
-      String? savedImagePath;
+      String? imageUrl;
       
       if (_currentFramePath != null && await File(_currentFramePath!).exists()) {
-        savedImagePath = await _imageService.saveSmokingImage(
-          _currentFramePath!,
+        final result = await ImageUploaderService.saveAndUploadAlertImage(
+          sourcePath: _currentFramePath!,
+          alertType: 'smoking_detected',
+          additionalInfo: '',
         );
         
-        // ✅ Scan file so it appears in Gallery
-        if (savedImagePath != null) {
-          await _scanMediaFile(savedImagePath);
+        imageUrl = result['remote'];
+        
+        if (imageUrl != null) {
+          debugPrint('✅ Smoking image uploaded');
         }
       }
       
-      // ✅ Get location and save alert
       final position = await _getCurrentLocation();
       
       await _alertService.createSmokingAlert(
         lens: lensName,
-        imagePath: savedImagePath,
+        imagePath: imageUrl,
         latitude: position?.latitude,
         longitude: position?.longitude,
         locationName: position != null
-            ? '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}'
+            ? '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}'
             : null,
       );
-      debugPrint('✅ Smoking alert saved with location');
+      debugPrint('✅ Smoking alert saved to Firebase');
     } catch (e, st) {
       debugPrint('❌ Smoking alert error: $e\n$st');
-    }
-  }
-
-  // ✅ NEW: Scan media file to appear in Gallery
-  Future<void> _scanMediaFile(String filePath) async {
-    try {
-      if (Platform.isAndroid) {
-        debugPrint('📸 Scanning media: $filePath');
-        // File will appear in gallery after a moment
-      }
-    } catch (e) {
-      debugPrint('⚠️ Media scan error: $e');
     }
   }
 
@@ -583,7 +562,6 @@ class SurveillanceController {
       
       debugPrint('📊 Distance: ${validFaces.length} good, $_facesTooFar far, $_facesTooClose close');
       
-      // ✅ FIXED: Count ALL faces for group detection
       _lastVerifiedPeopleCount = totalDetectedFaces;
       _lastVerificationTime = DateTime.now();
       
@@ -659,9 +637,10 @@ class SurveillanceController {
 
   void _scheduleImageCleanup(String imagePath) {
     _imageCleanupTimer?.cancel();
-    _imageCleanupTimer = Timer(Duration(seconds: 30), () {
+    _imageCleanupTimer = Timer(Duration(seconds: 5), () {
       try {
         File(imagePath).deleteSync();
+        debugPrint('🧹 Cleaned up: ${imagePath.split('/').last}');
       } catch (_) {}
     });
   }
@@ -703,57 +682,53 @@ class SurveillanceController {
       _lastKnownCount = knownNames.length;
       _lastUnknownCount = unknownCount;
 
-      debugPrint('📊 Verification: ${knownNames.length} known + $unknownCount unknown = ${knownNames.length + unknownCount} total');
+      debugPrint('📊 Verification: ${knownNames.length} known + $unknownCount unknown');
 
       if (hasUnknownFace && unknownCount > 0) {
         debugPrint('🚨 SAVING UNKNOWN FACE ALERT');
         
         final lensName = _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
-        
-        // ✅ Get location for unknown face alert
         final position = await _getCurrentLocation();
         
-        String? savedImagePath;
+        // Upload frame to Supabase
+        String? frameUrl;
         try {
-          savedImagePath = await _imageService.saveUnknownFaceImage(
-            framePath,
-            additionalInfo: 'u${unknownCount}_k${knownNames.length}',
+          final frameResult = await ImageUploaderService.saveAndUploadAlertImage(
+            sourcePath: framePath,
+            alertType: 'unknown_face',
+            additionalInfo: 'frame_u${unknownCount}_k${knownNames.length}',
           );
-          
-          if (savedImagePath != null) {
-            await _scanMediaFile(savedImagePath);
-          }
+          frameUrl = frameResult['remote'];
         } catch (e) {
-          debugPrint('❌ Frame save: $e');
+          debugPrint('❌ Frame upload: $e');
         }
         
-        List<String>? savedFacePaths;
+        // Upload face crops to Supabase
+        List<String> faceUrls = [];
         try {
           if (detectedFaces.isNotEmpty) {
-            savedFacePaths = await _imageService.saveFaceImages(
-              detectedFaces,
+            faceUrls = await ImageUploaderService.saveAndUploadFaceImages(
+              faces: detectedFaces,
               alertType: 'unknown_face',
               sessionInfo: 'u${unknownCount}_k${knownNames.length}',
             );
-            
-            for (final path in savedFacePaths) {
-              await _scanMediaFile(path);
-            }
+            debugPrint('✅ Uploaded ${faceUrls.length} face crops');
           }
         } catch (e) {
-          debugPrint('❌ Face save: $e');
+          debugPrint('❌ Face upload: $e');
         }
         
+        // Save to Firebase with Supabase URLs
         await _alertService.createUnknownAlert(
           threshold: FaceVerificationService.threshold,
           lens: lensName,
           note: '$unknownCount unknown face(s)',
-          imagePath: savedImagePath,
-          faceImagePaths: savedFacePaths,
+          imagePath: frameUrl,
+          faceImagePaths: faceUrls,
           latitude: position?.latitude,
           longitude: position?.longitude,
           locationName: position != null
-              ? '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}'
+              ? '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}'
               : null,
         );
       }
@@ -777,8 +752,8 @@ class SurveillanceController {
           lastMatch: knownList.isNotEmpty ? knownList.join(', ') : '',
         ));
       }
-    } catch (e) {
-      debugPrint('❌ Process results: $e');
+    } catch (e, st) {
+      debugPrint('❌ Process results: $e\n$st');
     }
   }
 
@@ -842,8 +817,8 @@ class SurveillanceController {
       }
 
       debugPrint('📷 Camera switched');
-    } catch (e) {
-      debugPrint('❌ Switch failed: $e');
+    } catch (e, st) {
+      debugPrint('❌ Switch failed: $e\n$st');
       if (mounted) {
         _updateState(_state.copyWith(faceStatus: 'Switch failed'));
       }

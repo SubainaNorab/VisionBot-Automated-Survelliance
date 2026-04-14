@@ -4,3 +4,7 @@ facenet.tflite
 firebase-credentials.json
 subaina.jpg
 enrolled_faces/*.jpg
+# .gitignore - Add this line
+.env
+.env.*
+!.env.example

@@ -1,36 +1,103 @@
-// main.dart - FIXED: Display people count and group detection correctly
+// main.dart - Secure credential loading (CORRECTED)
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'firebase_options.dart';
+import 'supabase_service.dart';
 import 'survelliance_controller.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  
-  await _requestAllPermissions();
-  
-  runApp(const VisionBot());
+  debugPrint('');
+  debugPrint('╔═══════════════════════════════════╗');
+  debugPrint('║  VisionBot - Loading Credentials   ║');
+  debugPrint('╚═══════════════════════════════════╝');
+  debugPrint('');
+
+  try {
+    // ✅ Step 1: Load .env file
+    debugPrint('1️⃣ Loading environment variables...');
+    await dotenv.load(fileName: ".env");
+    debugPrint('   ✅ Environment loaded');
+
+    // ✅ Step 2: Get Supabase credentials from .env
+    debugPrint('');
+    debugPrint('2️⃣ Reading Supabase credentials...');
+    
+    final supabaseUrl = dotenv.env['SUPABASE_URL'];
+    final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY'];
+
+    if (supabaseUrl == null || supabaseAnonKey == null) {
+      throw Exception(
+        '❌ Missing Supabase credentials!\n'
+        '   Please create .env file with SUPABASE_URL and SUPABASE_ANON_KEY\n'
+        '   See .env.example for template'
+      );
+    }
+
+    debugPrint('   ✅ Credentials loaded securely');
+    debugPrint('   URL: ${supabaseUrl.substring(0, 20)}...');
+
+    // ✅ Step 3: Initialize Firebase
+    debugPrint('');
+    debugPrint('3️⃣ Initializing Firebase...');
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    debugPrint('   ✅ Firebase ready');
+
+    // ✅ Step 4: Initialize Supabase with loaded credentials
+    debugPrint('');
+    debugPrint('4️⃣ Initializing Supabase Storage...');
+    await SupabaseService.initialize(
+      supabaseUrl: supabaseUrl,
+      supabaseAnonKey: supabaseAnonKey,
+    );
+    debugPrint('   ✅ Supabase ready');
+
+    // ✅ Step 5: Request Permissions
+    debugPrint('');
+    debugPrint('5️⃣ Requesting permissions...');
+    await _requestAllPermissions();
+    debugPrint('   ✅ Permissions handled');
+
+    debugPrint('');
+    debugPrint('╔═══════════════════════════════════╗');
+    debugPrint('║   App Ready - Starting VisionBot   ║');
+    debugPrint('╚═════════════════════════════════���═╝');
+    debugPrint('');
+
+    runApp(const VisionBot());
+  } catch (e, st) {
+    debugPrint('');
+    debugPrint('╔═══════════════════════════════════╗');
+    debugPrint('║  ❌ STARTUP FAILED                 ║');
+    debugPrint('╚═══════════════════════════════════╝');
+    debugPrint('');
+    debugPrint('❌ Error: $e');
+    debugPrint('   Stack: $st');
+    debugPrint('');
+    runApp(ErrorApp(error: e.toString()));
+  }
 }
 
 Future<void> _requestAllPermissions() async {
   try {
-    debugPrint('🔐 Requesting permissions...');
-    
     Map<Permission, PermissionStatus> statuses = await [
       Permission.camera,
       Permission.storage,
       Permission.photos,
-      Permission.location,   
+      Permission.location,
     ].request();
     
-    debugPrint('📋 Permission results:');
+    debugPrint('📋 Permission Results:');
     statuses.forEach((permission, status) {
-      debugPrint('   ${permission.toString()}: $status');
+      final emoji = status.isGranted ? '✅' : '⚠️';
+      debugPrint('   $emoji ${permission.toString().split('.').last}: $status');
     });
     
   } catch (e) {
@@ -49,6 +116,7 @@ class VisionBot extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
+        colorSchemeSeed: Colors.orange,
       ),
       home: const SurveillanceScreen(),
     );
@@ -62,7 +130,8 @@ class SurveillanceScreen extends StatefulWidget {
   State<SurveillanceScreen> createState() => _SurveillanceScreenState();
 }
 
-class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBindingObserver {
+class _SurveillanceScreenState extends State<SurveillanceScreen> 
+    with WidgetsBindingObserver {
   late final SurveillanceController _controller;
 
   @override
@@ -102,7 +171,10 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
         return Scaffold(
           backgroundColor: Colors.black,
           appBar: AppBar(
-            title: const Text('VisionBot Surveillance', style: TextStyle(fontSize: 16)),
+            title: const Text(
+              'VisionBot Surveillance',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
             backgroundColor: Colors.black87,
             toolbarHeight: 48,
             actions: [
@@ -132,7 +204,9 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
               Expanded(
                 child: Stack(
                   children: [
-                    Positioned.fill(child: _controller.camera.buildPreview()),
+                    Positioned.fill(
+                      child: _controller.camera.buildPreview(),
+                    ),
                     if (state.isBooting)
                       const Positioned.fill(
                         child: Center(
@@ -150,12 +224,17 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
                       top: 8,
                       left: 8,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.black87,
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                            color: _controller.autoVerify ? Colors.green : Colors.grey,
+                            color: _controller.autoVerify
+                                ? Colors.green
+                                : Colors.grey,
                             width: 2,
                           ),
                         ),
@@ -163,15 +242,21 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
-                              _controller.autoVerify ? Icons.check_circle : Icons.cancel,
-                              color: _controller.autoVerify ? Colors.green : Colors.grey,
+                              _controller.autoVerify
+                                  ? Icons.check_circle
+                                  : Icons.cancel,
+                              color: _controller.autoVerify
+                                  ? Colors.green
+                                  : Colors.grey,
                               size: 16,
                             ),
                             const SizedBox(width: 4),
                             Text(
                               'Auto: ${_controller.autoVerify ? "ON" : "OFF"}',
                               style: TextStyle(
-                                color: _controller.autoVerify ? Colors.green : Colors.grey,
+                                color: _controller.autoVerify
+                                    ? Colors.green
+                                    : Colors.grey,
                                 fontWeight: FontWeight.bold,
                                 fontSize: 12,
                               ),
@@ -215,9 +300,12 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
               const SizedBox(height: 16),
               
               ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                title: const Text('Close Range (1-2m)', style: TextStyle(fontSize: 14)),
-                subtitle: const Text('Face: 100-400px', style: TextStyle(fontSize: 11)),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                title: const Text('Close Range (1-2m)',
+                    style: TextStyle(fontSize: 14)),
+                subtitle:
+                    const Text('Face: 100-400px', style: TextStyle(fontSize: 11)),
                 leading: const Icon(Icons.person, color: Colors.orange, size: 20),
                 onTap: () {
                   _controller.setDistanceThresholds(
@@ -237,10 +325,15 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  title: const Text('Medium Range (2-4m)', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
-                  subtitle: const Text('Face: 50-500px | RECOMMENDED', style: TextStyle(fontSize: 11, color: Colors.green)),
-                  leading: const Icon(Icons.groups, color: Colors.green, size: 20),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  title: const Text('Medium Range (2-4m)',
+                      style: TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.bold)),
+                  subtitle: const Text('Face: 50-500px | RECOMMENDED',
+                      style: TextStyle(fontSize: 11, color: Colors.green)),
+                  leading:
+                      const Icon(Icons.groups, color: Colors.green, size: 20),
                   onTap: () {
                     _controller.setDistanceThresholds(
                       minWidth: 50,
@@ -255,9 +348,12 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
               ),
               
               ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                title: const Text('Long Range (3-6m)', style: TextStyle(fontSize: 14)),
-                subtitle: const Text('Face: 30-600px', style: TextStyle(fontSize: 11)),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                title: const Text('Long Range (3-6m)',
+                    style: TextStyle(fontSize: 14)),
+                subtitle:
+                    const Text('Face: 30-600px', style: TextStyle(fontSize: 11)),
                 leading: const Icon(Icons.visibility, color: Colors.blue, size: 20),
                 onTap: () {
                   _controller.setDistanceThresholds(
@@ -353,7 +449,10 @@ class _CompactStatusPanel extends StatelessWidget {
               Expanded(
                 child: Text(
                   state.faceStatus,
-                  style: const TextStyle(color: Colors.blueAccent, fontSize: 11),
+                  style: const TextStyle(
+                    color: Colors.blueAccent,
+                    fontSize: 11,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -362,7 +461,7 @@ class _CompactStatusPanel extends StatelessWidget {
           ),
           const SizedBox(height: 8),
 
-          // ✅ YOLO Detection status (People + Group + Smoke)
+          // YOLO Detection status
           _YoloDetectionDisplay(
             peopleCount: state.peopleCount,
             groupDetected: state.groupDetected,
@@ -376,7 +475,9 @@ class _CompactStatusPanel extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: autoVerify ? Colors.green.withOpacity(0.2) : Colors.grey.withOpacity(0.2),
+                  color: autoVerify
+                      ? Colors.green.withOpacity(0.2)
+                      : Colors.grey.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
                     color: autoVerify ? Colors.green : Colors.grey,
@@ -411,14 +512,16 @@ class _CompactStatusPanel extends StatelessWidget {
               SizedBox(
                 height: 36,
                 child: ElevatedButton.icon(
-                  onPressed: state.processingFace ? null : onVerifyPressed,
+                  onPressed:
+                      state.processingFace ? null : onVerifyPressed,
                   icon: const Icon(Icons.face, size: 14),
                   label: Text(
                     state.processingFace ? 'Processing...' : 'Verify',
                     style: const TextStyle(fontSize: 11),
                   ),
                   style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     visualDensity: VisualDensity.comfortable,
                   ),
                 ),
@@ -449,13 +552,16 @@ class _YoloDetectionDisplay extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.black54,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.orangeAccent.withOpacity(0.5), width: 2),
+        border: Border.all(
+          color: Colors.orangeAccent.withOpacity(0.5),
+          width: 2,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ✅ People count (Face verification detection)
+          // People count
           Row(
             children: [
               Icon(Icons.people, color: Colors.orangeAccent, size: 18),
@@ -472,18 +578,24 @@ class _YoloDetectionDisplay extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           
-          // ✅ Group + Smoke status
+          // Group + Smoke status
           Row(
             children: [
-              // Group detection (1+ person = GROUP)
+              // Group detection
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
-                    color: groupDetected ? Colors.red.withOpacity(0.2) : Colors.grey.withOpacity(0.1),
+                    color: groupDetected
+                        ? Colors.red.withOpacity(0.2)
+                        : Colors.grey.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(
-                      color: groupDetected ? Colors.redAccent : Colors.grey,
+                      color:
+                          groupDetected ? Colors.redAccent : Colors.grey,
                       width: 1,
                     ),
                   ),
@@ -491,14 +603,18 @@ class _YoloDetectionDisplay extends StatelessWidget {
                     children: [
                       Icon(
                         Icons.groups,
-                        color: groupDetected ? Colors.redAccent : Colors.grey,
+                        color: groupDetected
+                            ? Colors.redAccent
+                            : Colors.grey,
                         size: 16,
                       ),
                       const SizedBox(width: 4),
                       Text(
                         'Group: ${groupDetected ? "YES" : "NO"}',
                         style: TextStyle(
-                          color: groupDetected ? Colors.redAccent : Colors.grey,
+                          color: groupDetected
+                              ? Colors.redAccent
+                              : Colors.grey,
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
                         ),
@@ -513,12 +629,19 @@ class _YoloDetectionDisplay extends StatelessWidget {
               // Smoking detection
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
-                    color: smokingDetected ? Colors.red.withOpacity(0.2) : Colors.grey.withOpacity(0.1),
+                    color: smokingDetected
+                        ? Colors.red.withOpacity(0.2)
+                        : Colors.grey.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(
-                      color: smokingDetected ? Colors.redAccent : Colors.grey,
+                      color: smokingDetected
+                          ? Colors.redAccent
+                          : Colors.grey,
                       width: 1,
                     ),
                   ),
@@ -526,14 +649,18 @@ class _YoloDetectionDisplay extends StatelessWidget {
                     children: [
                       Icon(
                         Icons.smoke_free,
-                        color: smokingDetected ? Colors.redAccent : Colors.grey,
+                        color: smokingDetected
+                            ? Colors.redAccent
+                            : Colors.grey,
                         size: 16,
                       ),
                       const SizedBox(width: 4),
                       Text(
                         'Smoke: ${smokingDetected ? "YES" : "NO"}',
                         style: TextStyle(
-                          color: smokingDetected ? Colors.redAccent : Colors.grey,
+                          color: smokingDetected
+                              ? Colors.redAccent
+                              : Colors.grey,
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
                         ),
@@ -545,6 +672,49 @@ class _YoloDetectionDisplay extends StatelessWidget {
             ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class ErrorApp extends StatelessWidget {
+  final String error;
+
+  const ErrorApp({required this.error});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: Scaffold(
+        backgroundColor: Colors.red.shade900,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error, color: Colors.white, size: 64),
+              const SizedBox(height: 16),
+              Text(
+                'Configuration Error',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+              ),
+              const SizedBox(height: 16),
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  error,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
