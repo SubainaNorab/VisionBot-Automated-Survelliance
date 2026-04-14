@@ -19,8 +19,7 @@ dependencies:
   firebase_core: ^2.24.2
   permission_handler: ^11.0.1
   device_info_plus: ^10.0.1
-  geolocator: ^11.0.0
-  
+  geolocator: ^9.0.2  
   cupertino_icons: ^1.0.2
 
 dev_dependencies:

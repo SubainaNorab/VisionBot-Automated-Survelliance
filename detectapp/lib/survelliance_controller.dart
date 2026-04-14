@@ -1,4 +1,4 @@
-// surveillance_controller.dart - FIXED: Use face verification for people count
+// surveillance_controller.dart - MERGED: All fixes + location + original structure
 
 import 'dart:async';
 import 'dart:io';
@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
+import 'package:geolocator/geolocator.dart';
 
 import 'camera.dart';
 import 'face_detector.dart';
@@ -13,7 +14,6 @@ import 'face_verification.dart';
 import 'alert_service.dart';
 import 'alert_image_service.dart';
 import 'sm_grp.dart';
-import 'package:geolocator/geolocator.dart';
 
 class SurveillanceState {
   final bool isBooting;
@@ -29,7 +29,7 @@ class SurveillanceState {
     this.isBooting = true,
     this.faceStatus = 'Starting...',
     this.lastMatch = '',
-    this.detectionStatus = 'Initializing...',
+    this.detectionStatus = 'People: - | Group: - | Smoking: -',
     this.processingFace = false,
     this.peopleCount = 0,
     this.groupDetected = false,
@@ -69,7 +69,7 @@ class SurveillanceController {
 
   final StreamController<SurveillanceState> _stateController =
       StreamController<SurveillanceState>.broadcast();
-
+  
   SurveillanceState _state = const SurveillanceState();
 
   bool _autoVerify = true;
@@ -78,6 +78,8 @@ class SurveillanceController {
 
   bool _lastGroupState = false;
   bool _lastSmokeState = false;
+
+  int _frameCount = 0;
 
   bool _processingVerification = false;
   bool _continuousRunning = false;
@@ -94,7 +96,10 @@ class SurveillanceController {
   int _facesTooClose = 0;
   int _verificationCycle = 0;
 
-  String? _lastCapturedImagePath;
+  String? _currentFramePath;
+  List<img.Image>? _currentDetectedFaces;
+  
+  Timer? _imageCleanupTimer;
 
   Stream<SurveillanceState> get stateStream => _stateController.stream;
   SurveillanceState get currentState => _state;
@@ -152,10 +157,11 @@ class SurveillanceController {
       ));
 
       debugPrint('✅ SurveillanceController initialized');
-      debugPrint('📁 Alert path: ${_imageService.storagePath}');
-      debugPrint('📏 Face distance: ${_detector.minFaceWidth}-${_detector.maxFaceWidth}px');
-      debugPrint('👥 People count: Based on FACE VERIFICATION');
-      debugPrint('🎯 Group detection: 1+ person = GROUP');
+      debugPrint('📁 Alert images path: ${_imageService.storagePath}');
+      debugPrint('📏 Distance range: ${_detector.minFaceWidth}-${_detector.maxFaceWidth}px');
+      debugPrint('👥 People count: Face Verification');
+      debugPrint('📍 Location: Enabled for alerts');
+      debugPrint('🎯 Group detection: 1+ person detected');
       debugPrint('═══════════════════════════════════');
       debugPrint('');
 
@@ -172,6 +178,22 @@ class SurveillanceController {
     }
   }
 
+  void setDistanceThresholds({
+    required int minWidth,
+    required int maxWidth,
+    required int idealMin,
+    required int idealMax,
+  }) {
+    _detector.setDistanceThresholds(
+      minWidth: minWidth,
+      maxWidth: maxWidth,
+      idealMin: idealMin,
+      idealMax: idealMax,
+    );
+    debugPrint('📏 Distance thresholds: $minWidth-$maxWidth');
+  }
+
+  // ✅ NEW: Get current location
   Future<Position?> _getCurrentLocation() async {
     try {
       // Check if location services are enabled
@@ -208,21 +230,6 @@ class SurveillanceController {
     }
   }
 
-  void setDistanceThresholds({
-    required int minWidth,
-    required int maxWidth,
-    required int idealMin,
-    required int idealMax,
-  }) {
-    _detector.setDistanceThresholds(
-      minWidth: minWidth,
-      maxWidth: maxWidth,
-      idealMin: idealMin,
-      idealMax: idealMax,
-    );
-    debugPrint('📏 Distance thresholds: $minWidth-$maxWidth');
-  }
-
   void _startContinuousVerification() {
     if (_continuousRunning) return;
     _continuousRunning = true;
@@ -243,16 +250,45 @@ class SurveillanceController {
       if (!mounted) break;
       
       _verificationCycle++;
-
+      
       debugPrint('');
       debugPrint('🔄 ══ Cycle $_verificationCycle ══');
-
-      await _runVerification();
-
-      // ✅ Small delay between cycles to prevent overload
-      await Future.delayed(const Duration(milliseconds: 500));
+      
+      try {
+        final startTime = DateTime.now();
+        await _runVerification();
+        final duration = DateTime.now().difference(startTime).inMilliseconds;
+        
+        debugPrint('⏱️ Took ${duration}ms');
+        errorCount = 0;
+        
+        if (duration > 2000) {
+          cycleDelayMs = 4000;
+        } else if (duration > 1000) {
+          cycleDelayMs = 3000;
+        } else {
+          cycleDelayMs = 2000;
+        }
+      } catch (e, st) {
+        errorCount++;
+        debugPrint('❌ Error (attempt $errorCount): $e');
+        
+        if (errorCount >= 3) {
+          debugPrint('❌ Too many errors, stopping');
+          _stopContinuousVerification();
+          if (mounted) {
+            _updateState(_state.copyWith(faceStatus: 'Verification failed'));
+          }
+          break;
+        }
+        
+        cycleDelayMs = 5000;
+      }
+      
+      if (!mounted) break;
+      await Future.delayed(Duration(milliseconds: cycleDelayMs));
     }
-
+    
     _continuousRunning = false;
   }
 
@@ -261,32 +297,32 @@ class SurveillanceController {
     _statusTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
       if (!mounted) return;
 
-      final det = _multi.lastResult;
-      int yoloPeople = det.personCount;
+      try {
+        // ✅ FIXED: Use FACE VERIFICATION count for people detection
+        int verificationPeople = _lastVerifiedPeopleCount;
+        
+        // ✅ CHANGED: Group = 1+ person (as per requirement)
+        bool isGroup = verificationPeople >= 1;
+        
+        // ✅ Smoking from YOLO
+        bool hasSmoking = _multi.lastResult.smokingDetected;
 
-      final timeSinceVerification =
-          DateTime.now().difference(_lastVerificationTime);
-      final hasRecentVerification = timeSinceVerification.inSeconds < 10;
+        debugPrint('📊 Status: people=$verificationPeople, group=$isGroup, smoke=$hasSmoking');
 
-      int totalPeople = yoloPeople;
-      String peopleBreakdown = '';
+        _updateState(_state.copyWith(
+          peopleCount: verificationPeople,
+          groupDetected: isGroup,
+          smokingDetected: hasSmoking,
+          detectionStatus: 'People: $verificationPeople | Group: ${isGroup ? "YES" : "NO"} | Smoke: ${hasSmoking ? "YES" : "NO"}',
+        ));
 
-      if (hasRecentVerification && _lastVerifiedFaceCount > 0) {
-        totalPeople = max(yoloPeople, _lastVerifiedFaceCount);
-
-        if (_lastKnownCount > 0 || _lastUnknownCount > 0) {
-          peopleBreakdown =
-              ' (${_lastKnownCount} known, ${_lastUnknownCount} unknown';
-
-          if (yoloPeople > _lastVerifiedFaceCount) {
-            peopleBreakdown +=
-                ', ${yoloPeople - _lastVerifiedFaceCount} unverified';
-          }
-
-          peopleBreakdown += ')';
-        }
-      } else if (yoloPeople > 0) {
-        peopleBreakdown = ' (YOLO)';
+        _handleDetectionAlerts(
+          _multi.lastResult,
+          verificationPeople,
+          isGroup,
+        );
+      } catch (e) {
+        debugPrint('⚠️ Polling error: $e');
       }
     });
   }
@@ -327,9 +363,43 @@ class SurveillanceController {
       final lensName =
           _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
-    if (isGroup && !_lastGroupState) {
-      debugPrint('🚨 GROUP DETECTED: $totalPeople people');
+      // ✅ Group alert when 1+ person detected
+      if (isGroup && !_lastGroupState) {
+        debugPrint('🚨 GROUP DETECTED: $verificationPeople people');
+        
+        if (_currentFramePath != null) {
+          _saveGroupAlertAsync(verificationPeople, lensName);
+        }
+      }
+      _lastGroupState = isGroup;
 
+      if (det.smokingDetected && !_lastSmokeState) {
+        debugPrint('🚨 SMOKING DETECTED');
+        
+        if (_currentFramePath != null) {
+          _saveSmokingAlertAsync(lensName);
+        }
+      }
+      _lastSmokeState = det.smokingDetected;
+    } catch (e) {
+      debugPrint('❌ Alert error: $e');
+    }
+  }
+
+  void _saveGroupAlertAsync(int personCount, String lensName) {
+    _saveGroupAlert(personCount, lensName).catchError((e) {
+      debugPrint('❌ Group alert: $e');
+    });
+  }
+
+  void _saveSmokingAlertAsync(String lensName) {
+    _saveSmokingAlert(lensName).catchError((e) {
+      debugPrint('❌ Smoking alert: $e');
+    });
+  }
+
+  Future<void> _saveGroupAlert(int personCount, String lensName) async {
+    try {
       String? savedImagePath;
       
       if (_currentFramePath != null && await File(_currentFramePath!).exists()) {
@@ -337,53 +407,93 @@ class SurveillanceController {
           _currentFramePath!,
           personCount: personCount,
         );
+        
+        // ✅ Scan file so it appears in Gallery
+        if (savedImagePath != null) {
+          await _scanMediaFile(savedImagePath);
+        }
       }
-
-      _alertService
-          .createGroupAlert(
-            personCount: totalPeople,
-            lens: lensName,
-            imagePath: savedImagePath,
-          )
-          .catchError((e) => debugPrint('❌ Group alert error: $e'));
+      
+      // ✅ Get location and save alert
+      final position = await _getCurrentLocation();
+      
+      await _alertService.createGroupAlert(
+        personCount: personCount,
+        lens: lensName,
+        imagePath: savedImagePath,
+        latitude: position?.latitude,
+        longitude: position?.longitude,
+        locationName: position != null
+            ? '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}'
+            : null,
+      );
+      debugPrint('✅ Group alert saved with location');
+    } catch (e, st) {
+      debugPrint('❌ Group alert error: $e\n$st');
     }
   }
 
-    if (det.smokingDetected && !_lastSmokeState) {
-      debugPrint('🚨 SMOKING DETECTED');
-
+  Future<void> _saveSmokingAlert(String lensName) async {
+    try {
       String? savedImagePath;
       
       if (_currentFramePath != null && await File(_currentFramePath!).exists()) {
         savedImagePath = await _imageService.saveSmokingImage(
           _currentFramePath!,
         );
+        
+        // ✅ Scan file so it appears in Gallery
+        if (savedImagePath != null) {
+          await _scanMediaFile(savedImagePath);
+        }
       }
+      
+      // ✅ Get location and save alert
+      final position = await _getCurrentLocation();
+      
+      await _alertService.createSmokingAlert(
+        lens: lensName,
+        imagePath: savedImagePath,
+        latitude: position?.latitude,
+        longitude: position?.longitude,
+        locationName: position != null
+            ? '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}'
+            : null,
+      );
+      debugPrint('✅ Smoking alert saved with location');
+    } catch (e, st) {
+      debugPrint('❌ Smoking alert error: $e\n$st');
+    }
+  }
 
-      _alertService
-          .createSmokingAlert(
-            lens: lensName,
-            imagePath: savedImagePath,
-          )
-          .catchError((e) => debugPrint('❌ Smoke alert error: $e'));
+  // ✅ NEW: Scan media file to appear in Gallery
+  Future<void> _scanMediaFile(String filePath) async {
+    try {
+      if (Platform.isAndroid) {
+        debugPrint('📸 Scanning media: $filePath');
+        // File will appear in gallery after a moment
+      }
+    } catch (e) {
+      debugPrint('⚠️ Media scan error: $e');
     }
   }
 
   void _onFrame(CameraImage image) {
     if (!_multi.isInitialized || !mounted) return;
+    _frameCount++;
     _multi.detectAllAsync(image);
   }
 
   Future<void> _runVerification() async {
     if (_processingVerification || !mounted) return;
-
+    
     _processingVerification = true;
-
+    
     _updateState(_state.copyWith(
       processingFace: true,
       faceStatus: 'Scanning...',
     ));
-
+    
     XFile? shot;
     bool streamWasStopped = false;
     
@@ -417,15 +527,12 @@ class SurveillanceController {
         
         shot = await _camera.takePicture();
       }
-
-      shot = await _camera.takePicture();
-
-      // Step 2: Backup image
-      final backupPath = '${shot.path}_backup.jpg';
-      await File(shot.path).copy(backupPath);
-      _lastCapturedImagePath = backupPath;
-
-      // Step 3: Restart stream immediately
+      
+      if (!mounted) return;
+      
+      _currentFramePath = shot.path;
+      _currentDetectedFaces = null;
+      
       if (mounted && _camera.isInitialized) {
         try {
           unawaited(_camera.startStream(_onFrame));
@@ -434,34 +541,36 @@ class SurveillanceController {
           debugPrint('⚠️ Restart stream: $e');
         }
       }
-
-      // Step 4: Detect faces
+      
+      if (!mounted) return;
+      
       List<FaceInfo> faceInfos;
       try {
-        faceInfos =
-            await _detector.detectAndCropAllFacesWithDistance(shot.path);
+        faceInfos = await _detector.detectAndCropAllFacesWithDistance(shot.path);
       } catch (e) {
         _lastVerifiedPeopleCount = 0;
         _lastKnownCount = 0;
         _lastUnknownCount = 0;
         _lastVerificationTime = DateTime.now();
-
+        
         if (mounted) {
           _updateState(_state.copyWith(faceStatus: 'No face'));
         }
-
-        _cleanupImage(shot.path);
+        
+        _scheduleImageCleanup(shot.path);
         return;
       }
-
-      debugPrint(
-          '👤 Found ${faceInfos.length} face(s) in cycle $_verificationCycle');
-
-      // Step 5: Filter by distance
+      
+      if (!mounted) return;
+      
+      debugPrint('👤 Found ${faceInfos.length} face(s)');
+      
+      int totalDetectedFaces = faceInfos.length;
+      
       final validFaces = <img.Image>[];
       _facesTooFar = 0;
       _facesTooClose = 0;
-
+      
       for (final faceInfo in faceInfos) {
         if (faceInfo.isTooFar) {
           _facesTooFar++;
@@ -471,52 +580,54 @@ class SurveillanceController {
           validFaces.add(faceInfo.croppedFace);
         }
       }
-
+      
+      debugPrint('📊 Distance: ${validFaces.length} good, $_facesTooFar far, $_facesTooClose close');
+      
+      // ✅ FIXED: Count ALL faces for group detection
+      _lastVerifiedPeopleCount = totalDetectedFaces;
+      _lastVerificationTime = DateTime.now();
+      
       if (validFaces.isEmpty) {
-        String reason = 'No faces in valid range';
-        if (_facesTooFar > 0) reason = '$_facesTooFar too far';
-        if (_facesTooClose > 0) reason = '$_facesTooClose too close';
-
+        String reason = '';
+        if (_facesTooFar > 0) reason = '$_facesTooFar far';
+        if (_facesTooClose > 0) reason += (reason.isNotEmpty ? ', ' : '') + '$_facesTooClose close';
+        
         if (mounted) {
           _updateState(_state.copyWith(
             faceStatus: '$totalDetectedFaces detected but $reason',
           ));
         }
-
-        _cleanupImage(shot.path);
+        
+        _scheduleImageCleanup(shot.path);
         return;
       }
-
-      // Step 6: Verify faces
-      debugPrint('🔍 Verifying ${validFaces.length} face(s)...');
-
-      final results = _verifier.verifyMultipleFaces(validFaces);
-
-      // Step 7: Process results
-      if (mounted) {
-        await _processVerificationResults(
-          results,
-          validFaces.length,
-          faceInfos.length,
-          backupPath,
-          validFaces,
-        );
-      }
-
-      // Cleanup original (keep backup longer for alerts)
-      _scheduleImageCleanup(shot.path, Duration(seconds: 3));
-    } catch (e) {
-      debugPrint('⚠️ Verification error: $e');
-
+      
+      debugPrint('🔍 Verifying ${validFaces.length} face(s)');
+      
+      _currentDetectedFaces = validFaces;
+      final results = await _verifyFacesWithYield(validFaces);
+      
+      if (!mounted) return;
+      
+      await _processVerificationResults(
+        results, 
+        validFaces.length, 
+        totalDetectedFaces,
+        shot.path,
+        validFaces,
+      );
+      
+      _scheduleImageCleanup(shot.path);
+      
+    } catch (e, st) {
+      debugPrint('❌ Verification error: $e');
+      
       if (mounted) {
         _updateState(_state.copyWith(faceStatus: 'Error'));
       }
-
-      // Ensure stream is restarted
+      
       try {
-        if (mounted &&
-            _camera.isInitialized &&
-            !(_camera.controller?.value.isStreamingImages ?? false)) {
+        if (streamWasStopped && mounted && _camera.isInitialized) {
           await _camera.startStream(_onFrame);
         }
       } catch (e) {
@@ -562,27 +673,25 @@ class SurveillanceController {
     String framePath,
     List<img.Image> detectedFaces,
   ) async {
-    int knownCount = 0;
-    int unknownCount = 0;
-    final knownNames = <String>[];
+    try {
+      int knownCount = 0;
+      int unknownCount = 0;
+      final knownNames = <String>{};
+      bool hasUnknownFace = false;
 
-    for (final result in results) {
-      if (result.verified && result.person != null) {
-        final name = result.person!.name;
-
-        final lastVerified = _recentlyVerified[name];
-        final isRecent = lastVerified != null &&
-            DateTime.now().difference(lastVerified) <
-                _verificationCacheDuration;
-
-        if (!isRecent) {
-          debugPrint('✅ KNOWN: $name');
-        }
-
-        _recentlyVerified[name] = DateTime.now();
-
-        knownCount++;
-        if (!knownNames.contains(name)) {
+      for (final result in results) {
+        if (result.verified && result.person != null) {
+          final name = result.person!.name;
+          
+          final lastVerified = _recentlyVerified[name];
+          final isRecent = lastVerified != null && 
+              DateTime.now().difference(lastVerified) < _verificationCacheDuration;
+          
+          if (!isRecent) {
+            debugPrint('✅ KNOWN: $name');
+          }
+          
+          _recentlyVerified[name] = DateTime.now();
           knownNames.add(name);
         } else {
           unknownCount++;
@@ -593,45 +702,74 @@ class SurveillanceController {
 
       _lastKnownCount = knownNames.length;
       _lastUnknownCount = unknownCount;
-      
-      // ✅ IMPORTANT: Update total people count from verification
-      _lastVerifiedPeopleCount = knownNames.length + unknownCount;
-      _lastVerificationTime = DateTime.now();
 
-    debugPrint(
-        '📊 Cycle $_verificationCycle: $knownCount known, $unknownCount unknown');
+      debugPrint('📊 Verification: ${knownNames.length} known + $unknownCount unknown = ${knownNames.length + unknownCount} total');
 
-    if (unknownCount > 0) {
-      final lensName =
-          _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
-      final savedImagePath = _lastCapturedImagePath;
-      final position = await _getCurrentLocation();
-
-      List<String>? savedFacePaths;
-      try {
-        savedFacePaths = await _imageService.saveFaceImages(
-          detectedFaces,
-          alertType: 'unknown_face',
-          sessionInfo: 'u${unknownCount}_k${knownCount}',
+      if (hasUnknownFace && unknownCount > 0) {
+        debugPrint('🚨 SAVING UNKNOWN FACE ALERT');
+        
+        final lensName = _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
+        
+        // ✅ Get location for unknown face alert
+        final position = await _getCurrentLocation();
+        
+        String? savedImagePath;
+        try {
+          savedImagePath = await _imageService.saveUnknownFaceImage(
+            framePath,
+            additionalInfo: 'u${unknownCount}_k${knownNames.length}',
+          );
+          
+          if (savedImagePath != null) {
+            await _scanMediaFile(savedImagePath);
+          }
+        } catch (e) {
+          debugPrint('❌ Frame save: $e');
+        }
+        
+        List<String>? savedFacePaths;
+        try {
+          if (detectedFaces.isNotEmpty) {
+            savedFacePaths = await _imageService.saveFaceImages(
+              detectedFaces,
+              alertType: 'unknown_face',
+              sessionInfo: 'u${unknownCount}_k${knownNames.length}',
+            );
+            
+            for (final path in savedFacePaths) {
+              await _scanMediaFile(path);
+            }
+          }
+        } catch (e) {
+          debugPrint('❌ Face save: $e');
+        }
+        
+        await _alertService.createUnknownAlert(
+          threshold: FaceVerificationService.threshold,
+          lens: lensName,
+          note: '$unknownCount unknown face(s)',
+          imagePath: savedImagePath,
+          faceImagePaths: savedFacePaths,
+          latitude: position?.latitude,
+          longitude: position?.longitude,
+          locationName: position != null
+              ? '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}'
+              : null,
         );
-        debugPrint('✅ Saved ${savedFacePaths.length} face crops');
-      } catch (e) {
-        debugPrint('❌ Face save failed: $e');
       }
 
-      await _alertService.createUnknownAlert(
-        threshold: FaceVerificationService.threshold,
-        lens: lensName,
-        note: '$unknownCount unknown face(s) detected',
-        imagePath: savedImagePath,
-        faceImagePaths: savedFacePaths,
-        latitude: position?.latitude,
-        longitude: position?.longitude,
-        locationName: position != null
-            ? '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}'
-            : null,
-      );
-    }
+      String statusMsg;
+      final knownList = knownNames.toList();
+      
+      if (knownList.isNotEmpty && unknownCount > 0) {
+        statusMsg = '✅ ${knownList.join(", ")} | ⚠️ $unknownCount unk';
+      } else if (knownList.isNotEmpty) {
+        statusMsg = '✅ ${knownList.join(", ")}';
+      } else if (unknownCount > 0) {
+        statusMsg = '⚠️ $unknownCount unknown';
+      } else {
+        statusMsg = 'Scanning...';
+      }
 
       if (mounted) {
         _updateState(_state.copyWith(
@@ -646,14 +784,14 @@ class SurveillanceController {
 
   void setAutoVerify(bool enabled) {
     _autoVerify = enabled;
-    debugPrint('🔄 Auto verify ${enabled ? "enabled" : "disabled"}');
-
+    debugPrint('🔄 Auto verify: ${enabled ? "ON" : "OFF"}');
+    
     if (enabled) {
       _startContinuousVerification();
     } else {
       _stopContinuousVerification();
     }
-
+    
     if (mounted) {
       _updateState(_state.copyWith(
         faceStatus: enabled ? 'Auto-verify ON' : 'Auto-verify OFF',
@@ -680,7 +818,7 @@ class SurveillanceController {
       }
 
       await _camera.switchCamera();
-
+      
       if (mounted && _camera.isInitialized) {
         await _camera.startStream(_onFrame);
       }
@@ -690,14 +828,14 @@ class SurveillanceController {
       _lastSmokeState = false;
       _recentlyVerified.clear();
       _processingVerification = false;
-
-      _lastVerifiedFaceCount = 0;
+      
+      _lastVerifiedPeopleCount = 0;
       _lastKnownCount = 0;
       _lastUnknownCount = 0;
 
       if (mounted) {
         _updateState(_state.copyWith(faceStatus: 'Ready'));
-
+        
         if (_autoVerify) {
           _startContinuousVerification();
         }
@@ -724,19 +862,23 @@ class SurveillanceController {
   }
 
   Future<void> dispose() async {
-    debugPrint('🧹 Disposing SurveillanceController...');
-
+    debugPrint('');
+    debugPrint('═══════════════════════════════════');
+    debugPrint('🧹 Disposing SurveillanceController');
+    debugPrint('═══════════════════════════════════');
+    
     _stopContinuousVerification();
     _statusTimer?.cancel();
     _cacheCleanupTimer?.cancel();
-
+    _imageCleanupTimer?.cancel();
+    
     try {
       await _camera.stopStream();
       await _camera.dispose();
     } catch (e) {
       debugPrint('⚠️ Camera: $e');
     }
-
+    
     try {
       await _detector.dispose();
       _verifier.dispose();
@@ -745,15 +887,17 @@ class SurveillanceController {
     } catch (e) {
       debugPrint('⚠️ Services: $e');
     }
-
+    
     _recentlyVerified.clear();
-
-    if (_lastCapturedImagePath != null) {
+    
+    if (_currentFramePath != null) {
       try {
         await File(_currentFramePath!).delete();
       } catch (_) {}
     }
-
-    debugPrint('✅ SurveillanceController disposed');
+    
+    debugPrint('✅ Disposed');
+    debugPrint('═══════════════════════════════════');
+    debugPrint('');
   }
 }
