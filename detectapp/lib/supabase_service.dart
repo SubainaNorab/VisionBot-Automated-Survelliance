@@ -1,4 +1,4 @@
-// lib/services/supabase_service.dart - Supabase Storage Only
+// lib/services/supabase_service.dart - Fixed with retry logic
 
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -39,7 +39,7 @@ class SupabaseService {
     }
   }
 
-  /// Upload alert image to Supabase
+  /// Upload alert image to Supabase (with retry)
   static Future<String?> uploadAlertImage({
     required String localPath,
     required String alertType,
@@ -63,22 +63,41 @@ class SupabaseService {
 
       final fileBytes = await file.readAsBytes();
 
-      await _client.storage
-          .from(_bucket)
-          .uploadBinary(
-            remotePath,
-            fileBytes,
-            fileOptions: const FileOptions(
-              cacheControl: '3600',
-              upsert: false,
-            ),
-          );
-
-      final publicUrl = _client.storage.from(_bucket).getPublicUrl(remotePath);
-
-      debugPrint('✅ Uploaded: $publicUrl');
+      // ✅ Retry logic
+      int retryCount = 0;
+      const int maxRetries = 3;
       
-      return publicUrl;
+      while (retryCount < maxRetries) {
+        try {
+          await _client.storage
+              .from(_bucket)
+              .uploadBinary(
+                remotePath,
+                fileBytes,
+                fileOptions: const FileOptions(
+                  cacheControl: '3600',
+                  upsert: true,  // ✅ Allow overwrite
+                ),
+              );
+
+          final publicUrl = _client.storage.from(_bucket).getPublicUrl(remotePath);
+
+          debugPrint('✅ Uploaded: $publicUrl');
+          
+          return publicUrl;
+        } catch (e) {
+          retryCount++;
+          debugPrint('⚠️ Upload attempt $retryCount failed: $e');
+          
+          if (retryCount < maxRetries) {
+            await Future.delayed(Duration(seconds: retryCount * 2));
+          } else {
+            rethrow;
+          }
+        }
+      }
+      
+      return null;
     } catch (e, st) {
       debugPrint('❌ Upload error: $e');
       debugPrint('   Stack: $st');
@@ -86,7 +105,7 @@ class SupabaseService {
     }
   }
 
-  /// Upload multiple face images
+  /// Upload multiple face images (with retry)
   static Future<List<String>> uploadFaceImages({
     required List<String> localPaths,
     required String alertType,
@@ -114,19 +133,41 @@ class SupabaseService {
 
         final fileBytes = await file.readAsBytes();
 
-        await _client.storage
-            .from(_bucket)
-            .uploadBinary(
-              remotePath,
-              fileBytes,
-              fileOptions: const FileOptions(
-                cacheControl: '3600',
-                upsert: false,
-              ),
-            );
+        // ✅ Retry logic for faces
+        int retryCount = 0;
+        const int maxRetries = 3;
+        bool uploaded = false;
 
-        final publicUrl = _client.storage.from(_bucket).getPublicUrl(remotePath);
-        uploadedUrls.add(publicUrl);
+        while (retryCount < maxRetries && !uploaded) {
+          try {
+            await _client.storage
+                .from(_bucket)
+                .uploadBinary(
+                  remotePath,
+                  fileBytes,
+                  fileOptions: const FileOptions(
+                    cacheControl: '3600',
+                    upsert: true,
+                  ),
+                );
+
+            final publicUrl = _client.storage.from(_bucket).getPublicUrl(remotePath);
+            uploadedUrls.add(publicUrl);
+            uploaded = true;
+            debugPrint('      ✅ Uploaded');
+          } catch (e) {
+            retryCount++;
+            debugPrint('      ⚠️ Retry $retryCount: $e');
+            
+            if (retryCount < maxRetries) {
+              await Future.delayed(Duration(seconds: retryCount * 2));
+            }
+          }
+        }
+
+        if (!uploaded) {
+          debugPrint('      ❌ Failed after $maxRetries retries');
+        }
       }
 
       debugPrint('✅ Uploaded ${uploadedUrls.length} faces');

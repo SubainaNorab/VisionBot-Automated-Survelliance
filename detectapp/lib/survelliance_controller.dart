@@ -385,11 +385,13 @@ class SurveillanceController {
   }
 
   /// Save group alert with Supabase upload
-  Future<void> _saveGroupAlert(int personCount, String lensName) async {
-    try {
-      String? imageUrl;
-      
-      if (_currentFramePath != null && await File(_currentFramePath!).exists()) {
+  /// Save group alert with Supabase upload
+Future<void> _saveGroupAlert(int personCount, String lensName) async {
+  try {
+    String? imageUrl;
+    
+    if (_currentFramePath != null && await File(_currentFramePath!).exists()) {
+      try {
         final result = await ImageUploaderService.saveAndUploadAlertImage(
           sourcePath: _currentFramePath!,
           alertType: 'group_detected',
@@ -400,33 +402,42 @@ class SurveillanceController {
         
         if (imageUrl != null) {
           debugPrint('✅ Group image uploaded');
+        } else {
+          debugPrint('⚠️ Upload returned null, continuing without image');
         }
+      } catch (uploadError) {
+        debugPrint('⚠️ Upload failed, saving alert without image: $uploadError');
+        // Continue without image - don't crash
       }
-      
-      final position = await _getCurrentLocation();
-      
-      await _alertService.createGroupAlert(
-        personCount: personCount,
-        lens: lensName,
-        imagePath: imageUrl,
-        latitude: position?.latitude,
-        longitude: position?.longitude,
-        locationName: position != null
-            ? '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}'
-            : null,
-      );
-      debugPrint('✅ Group alert saved to Firebase');
-    } catch (e, st) {
-      debugPrint('❌ Group alert error: $e\n$st');
     }
+    
+    final position = await _getCurrentLocation();
+    
+    // ✅ Always save alert, even if image upload failed
+    await _alertService.createGroupAlert(
+      personCount: personCount,
+      lens: lensName,
+      imagePath: imageUrl,
+      latitude: position?.latitude,
+      longitude: position?.longitude,
+      locationName: position != null
+          ? '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}'
+          : null,
+    );
+    debugPrint('✅ Group alert saved to Firebase');
+  } catch (e, st) {
+    debugPrint('❌ Group alert error: $e\n$st');
+    // Don't crash - just log
   }
+}
 
-  /// Save smoking alert with Supabase upload
-  Future<void> _saveSmokingAlert(String lensName) async {
-    try {
-      String? imageUrl;
-      
-      if (_currentFramePath != null && await File(_currentFramePath!).exists()) {
+/// Save smoking alert with Supabase upload
+Future<void> _saveSmokingAlert(String lensName) async {
+  try {
+    String? imageUrl;
+    
+    if (_currentFramePath != null && await File(_currentFramePath!).exists()) {
+      try {
         final result = await ImageUploaderService.saveAndUploadAlertImage(
           sourcePath: _currentFramePath!,
           alertType: 'smoking_detected',
@@ -437,26 +448,31 @@ class SurveillanceController {
         
         if (imageUrl != null) {
           debugPrint('✅ Smoking image uploaded');
+        } else {
+          debugPrint('⚠️ Upload returned null, continuing without image');
         }
+      } catch (uploadError) {
+        debugPrint('⚠️ Upload failed, saving alert without image: $uploadError');
       }
-      
-      final position = await _getCurrentLocation();
-      
-      await _alertService.createSmokingAlert(
-        lens: lensName,
-        imagePath: imageUrl,
-        latitude: position?.latitude,
-        longitude: position?.longitude,
-        locationName: position != null
-            ? '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}'
-            : null,
-      );
-      debugPrint('✅ Smoking alert saved to Firebase');
-    } catch (e, st) {
-      debugPrint('❌ Smoking alert error: $e\n$st');
     }
+    
+    final position = await _getCurrentLocation();
+    
+    // ✅ Always save alert, even if image upload failed
+    await _alertService.createSmokingAlert(
+      lens: lensName,
+      imagePath: imageUrl,
+      latitude: position?.latitude,
+      longitude: position?.longitude,
+      locationName: position != null
+          ? '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}'
+          : null,
+    );
+    debugPrint('✅ Smoking alert saved to Firebase');
+  } catch (e, st) {
+    debugPrint('❌ Smoking alert error: $e\n$st');
   }
-
+}
   void _onFrame(CameraImage image) {
     if (!_multi.isInitialized || !mounted) return;
     _frameCount++;
