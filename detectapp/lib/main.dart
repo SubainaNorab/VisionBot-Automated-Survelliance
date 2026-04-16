@@ -5,6 +5,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'firebase_options.dart';
+import 'geojson_map_view.dart';
 import 'survelliance_controller.dart';
 
 void main() async {
@@ -50,6 +51,9 @@ class VisionBot extends StatelessWidget {
         useMaterial3: true,
         brightness: Brightness.dark,
       ),
+      routes: {
+        '/debug/geojson-map': (_) => const GeoJSONMapView(),
+      },
       home: const SurveillanceScreen(),
     );
   }
@@ -106,6 +110,12 @@ class _SurveillanceScreenState extends State<SurveillanceScreen> with WidgetsBin
             backgroundColor: Colors.black87,
             toolbarHeight: 48,
             actions: [
+              IconButton(
+                onPressed: () => Navigator.of(context).pushNamed('/debug/geojson-map'),
+                icon: const Icon(Icons.map, size: 20),
+                tooltip: 'Debug Path on Map',
+                padding: const EdgeInsets.all(8),
+              ),
               IconButton(
                 onPressed: () => _showDetectionSettings(context),
                 icon: const Icon(Icons.settings, size: 20),
