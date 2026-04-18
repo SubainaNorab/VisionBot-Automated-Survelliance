@@ -1,4 +1,4 @@
-// surveillance_controller.dart - NO LOCAL STORAGE
+// surveillance_controller.dart - HYBRID: Face Detection + YOLO Confirmation for group
 
 import 'dart:async';
 import 'dart:io';
@@ -22,8 +22,11 @@ class SurveillanceState {
   final String lastMatch;
   final String detectionStatus;
   final bool processingFace;
-  final int peopleCount;
-  final bool groupDetected;
+  final int yoloPeopleCount; // ✅ YOLO confirmation count
+  final int verifiedPeopleCount; // ✅ Face-verified count (PRIMARY)
+  final int knownPeopleCount;
+  final int unknownPeopleCount;
+  final bool groupDetected; // ✅ Face + YOLO both detect
   final bool smokingDetected;
 
   const SurveillanceState({
@@ -32,7 +35,10 @@ class SurveillanceState {
     this.lastMatch = '',
     this.detectionStatus = 'People: - | Group: - | Smoking: -',
     this.processingFace = false,
-    this.peopleCount = 0,
+    this.yoloPeopleCount = 0,
+    this.verifiedPeopleCount = 0,
+    this.knownPeopleCount = 0,
+    this.unknownPeopleCount = 0,
     this.groupDetected = false,
     this.smokingDetected = false,
   });
@@ -43,7 +49,10 @@ class SurveillanceState {
     String? lastMatch,
     String? detectionStatus,
     bool? processingFace,
-    int? peopleCount,
+    int? yoloPeopleCount,
+    int? verifiedPeopleCount,
+    int? knownPeopleCount,
+    int? unknownPeopleCount,
     bool? groupDetected,
     bool? smokingDetected,
   }) {
@@ -53,7 +62,10 @@ class SurveillanceState {
       lastMatch: lastMatch ?? this.lastMatch,
       detectionStatus: detectionStatus ?? this.detectionStatus,
       processingFace: processingFace ?? this.processingFace,
-      peopleCount: peopleCount ?? this.peopleCount,
+      yoloPeopleCount: yoloPeopleCount ?? this.yoloPeopleCount,
+      verifiedPeopleCount: verifiedPeopleCount ?? this.verifiedPeopleCount,
+      knownPeopleCount: knownPeopleCount ?? this.knownPeopleCount,
+      unknownPeopleCount: unknownPeopleCount ?? this.unknownPeopleCount,
       groupDetected: groupDetected ?? this.groupDetected,
       smokingDetected: smokingDetected ?? this.smokingDetected,
     );
@@ -87,6 +99,8 @@ class SurveillanceController {
   final Map<String, DateTime> _recentlyVerified = {};
   final Duration _verificationCacheDuration = Duration(seconds: 30);
 
+  // ✅ Hybrid tracking
+  int _lastYoloPeopleCount = 0;
   int _lastVerifiedPeopleCount = 0;
   int _lastKnownCount = 0;
   int _lastUnknownCount = 0;
@@ -154,10 +168,10 @@ class SurveillanceController {
 
       debugPrint('✅ SurveillanceController initialized');
       debugPrint('📏 Distance range: ${_detector.minFaceWidth}-${_detector.maxFaceWidth}px');
-      debugPrint('👥 People count: Face Verification');
-      debugPrint('📍 Location: Enabled for alerts');
-      debugPrint('☁️ Storage: Supabase Cloud Only');
-      debugPrint('🎯 Group detection: 1+ person detected');
+      debugPrint('🎯 HYBRID DETECTION MODE:');
+      debugPrint('   • FACE: Primary detection (identity verification)');
+      debugPrint('   • YOLO: Secondary confirmation (real-time validation)');
+      debugPrint('   • GROUP: Face detected + YOLO confirms = ALERT');
       debugPrint('═══════════════════════════════════');
       debugPrint('');
 
@@ -193,33 +207,22 @@ class SurveillanceController {
   Future<Position?> _getCurrentLocation() async {
     try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        debugPrint('⚠️ Location services disabled');
-        return null;
-      }
+      if (!serviceEnabled) return null;
 
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          debugPrint('⚠️ Location permission denied');
-          return null;
-        }
+        if (permission == LocationPermission.denied) return null;
       }
-      if (permission == LocationPermission.deniedForever) {
-        debugPrint('⚠️ Location permission permanently denied');
-        return null;
-      }
+      if (permission == LocationPermission.deniedForever) return null;
 
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
         timeLimit: const Duration(seconds: 5),
       );
 
-      debugPrint('📍 Location: ${position.latitude}, ${position.longitude}');
       return position;
     } catch (e) {
-      debugPrint('❌ Location error: $e');
       return null;
     }
   }
@@ -245,15 +248,11 @@ class SurveillanceController {
       
       _verificationCycle++;
       
-      debugPrint('');
-      debugPrint('🔄 ══ Cycle $_verificationCycle ══');
-      
       try {
         final startTime = DateTime.now();
         await _runVerification();
         final duration = DateTime.now().difference(startTime).inMilliseconds;
         
-        debugPrint('⏱️ Took ${duration}ms');
         errorCount = 0;
         
         if (duration > 2000) {
@@ -265,10 +264,9 @@ class SurveillanceController {
         }
       } catch (e, st) {
         errorCount++;
-        debugPrint('❌ Error (attempt $errorCount): $e');
+        debugPrint('❌ Verification error (attempt $errorCount): $e');
         
         if (errorCount >= 3) {
-          debugPrint('❌ Too many errors, stopping');
           _stopContinuousVerification();
           if (mounted) {
             _updateState(_state.copyWith(faceStatus: 'Verification failed'));
@@ -292,20 +290,62 @@ class SurveillanceController {
       if (!mounted) return;
 
       try {
-        int verificationPeople = _lastVerifiedPeopleCount;
-        bool isGroup = verificationPeople >= 1;
+        // ✅ Get detection counts
+        int yoloPeopleCount = _multi.lastResult.personCount;
+        int verifiedPeopleCount = _lastVerifiedPeopleCount;
+        int knownCount = _lastKnownCount;
+        int unknownCount = _lastUnknownCount;
         bool hasSmoking = _multi.lastResult.smokingDetected;
 
+        // ✅ FIXED: Group detection logic
+        // PRIMARY: Face verification detects people
+        // SECONDARY: YOLO simultaneously confirms those people
+        bool isGroup = false;
+
+        if (verifiedPeopleCount > 0 && yoloPeopleCount > 0) {
+          // ✅ PERFECT: Face detected + YOLO confirmed
+          isGroup = true;
+          debugPrint('✅ GROUP CONFIRMED: Face($verifiedPeopleCount) + YOLO($yoloPeopleCount) ');
+        } else if (verifiedPeopleCount > 0 && yoloPeopleCount == 0) {
+          // ⏳ Face detected but YOLO not yet updated - WAIT
+          isGroup = false;
+          debugPrint('⏳ Face detected $verifiedPeopleCount - waiting for YOLO confirmation...');
+        } else if (yoloPeopleCount > 0 && verifiedPeopleCount == 0) {
+          // ⚠️ YOLO detected but face verification not done - WAIT
+          isGroup = false;
+          debugPrint('⏳ YOLO detected $yoloPeopleCount - waiting for face verification...');
+        } else {
+          // ❌ No detection
+          isGroup = false;
+        }
+
+        String detectionBreakdown = '';
+        if (verifiedPeopleCount > 0) {
+          if (knownCount > 0 && unknownCount > 0) {
+            detectionBreakdown = ' (${knownCount} known + ${unknownCount} unknown)';
+          } else if (knownCount > 0) {
+            detectionBreakdown = ' (${knownCount} known)';
+          } else if (unknownCount > 0) {
+            detectionBreakdown = ' (${unknownCount} unknown)';
+          }
+        }
+
         _updateState(_state.copyWith(
-          peopleCount: verificationPeople,
+          yoloPeopleCount: yoloPeopleCount,
+          verifiedPeopleCount: verifiedPeopleCount,
+          knownPeopleCount: knownCount,
+          unknownPeopleCount: unknownCount,
           groupDetected: isGroup,
           smokingDetected: hasSmoking,
-          detectionStatus: 'People: $verificationPeople | Group: ${isGroup ? "YES" : "NO"} | Smoke: ${hasSmoking ? "YES" : "NO"}',
+          detectionStatus: 'Face: $verifiedPeopleCount$detectionBreakdown | YOLO: $yoloPeopleCount | Group: ${isGroup ? "YES" : "NO"} | Smoke: ${hasSmoking ? "YES" : "NO"}',
         ));
 
         _handleDetectionAlerts(
           _multi.lastResult,
-          verificationPeople,
+          yoloPeopleCount,
+          verifiedPeopleCount,
+          knownCount,
+          unknownCount,
           isGroup,
         );
       } catch (e) {
@@ -341,7 +381,10 @@ class SurveillanceController {
 
   void _handleDetectionAlerts(
     DetectionResult det,
-    int verificationPeople,
+    int yoloPeopleCount,
+    int verifiedPeopleCount,
+    int knownCount,
+    int unknownCount,
     bool isGroup,
   ) {
     if (!mounted) return;
@@ -350,15 +393,17 @@ class SurveillanceController {
       final lensName =
           _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
+      // ✅ GROUP ALERT: Face detected + YOLO confirmed
       if (isGroup && !_lastGroupState) {
-        debugPrint('🚨 GROUP DETECTED: $verificationPeople people');
+        debugPrint('🚨 GROUP DETECTED (FACE + YOLO): $verifiedPeopleCount people ($knownCount known + $unknownCount unknown) confirmed by YOLO');
         
         if (_currentFramePath != null) {
-          _saveGroupAlertAsync(verificationPeople, lensName);
+          _saveGroupAlertAsync(verifiedPeopleCount, knownCount, unknownCount, lensName);
         }
       }
       _lastGroupState = isGroup;
 
+      // ✅ SMOKING ALERT
       if (det.smokingDetected && !_lastSmokeState) {
         debugPrint('🚨 SMOKING DETECTED');
         
@@ -372,8 +417,8 @@ class SurveillanceController {
     }
   }
 
-  void _saveGroupAlertAsync(int personCount, String lensName) {
-    _saveGroupAlert(personCount, lensName).catchError((e) {
+  void _saveGroupAlertAsync(int personCount, int knownCount, int unknownCount, String lensName) {
+    _saveGroupAlert(personCount, knownCount, unknownCount, lensName).catchError((e) {
       debugPrint('❌ Group alert error: $e');
     });
   }
@@ -384,95 +429,87 @@ class SurveillanceController {
     });
   }
 
-  /// Save group alert with Supabase upload
-  /// Save group alert with Supabase upload
-Future<void> _saveGroupAlert(int personCount, String lensName) async {
-  try {
-    String? imageUrl;
-    
-    if (_currentFramePath != null && await File(_currentFramePath!).exists()) {
-      try {
-        final result = await ImageUploaderService.saveAndUploadAlertImage(
-          sourcePath: _currentFramePath!,
-          alertType: 'group_detected',
-          additionalInfo: 'count_${personCount}',
-        );
-        
-        imageUrl = result['remote'];
-        
-        if (imageUrl != null) {
-          debugPrint('✅ Group image uploaded');
-        } else {
-          debugPrint('⚠️ Upload returned null, continuing without image');
+  /// Save group alert - Face + YOLO confirmed
+  Future<void> _saveGroupAlert(int personCount, int knownCount, int unknownCount, String lensName) async {
+    try {
+      String? imageUrl;
+      
+      if (_currentFramePath != null && await File(_currentFramePath!).exists()) {
+        try {
+          final result = await ImageUploaderService.saveAndUploadAlertImage(
+            sourcePath: _currentFramePath!,
+            alertType: 'group_detected',
+            additionalInfo: 'face_verified_${personCount}_k${knownCount}_u${unknownCount}',
+          );
+          
+          imageUrl = result['remote'];
+          
+          if (imageUrl != null) {
+            debugPrint('✅ Group image uploaded');
+          }
+        } catch (uploadError) {
+          debugPrint('⚠️ Upload failed, continuing without image');
         }
-      } catch (uploadError) {
-        debugPrint('⚠️ Upload failed, saving alert without image: $uploadError');
-        // Continue without image - don't crash
       }
+      
+      final position = await _getCurrentLocation();
+      
+      await _alertService.createGroupAlert(
+        personCount: personCount,
+        lens: lensName,
+        imagePath: imageUrl,
+        latitude: position?.latitude,
+        longitude: position?.longitude,
+        locationName: position != null
+            ? '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}'
+            : null,
+      );
+      debugPrint('✅ Group alert saved to Firebase (FACE + YOLO CONFIRMED)');
+    } catch (e, st) {
+      debugPrint('❌ Group alert error: $e\n$st');
     }
-    
-    final position = await _getCurrentLocation();
-    
-    // ✅ Always save alert, even if image upload failed
-    await _alertService.createGroupAlert(
-      personCount: personCount,
-      lens: lensName,
-      imagePath: imageUrl,
-      latitude: position?.latitude,
-      longitude: position?.longitude,
-      locationName: position != null
-          ? '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}'
-          : null,
-    );
-    debugPrint('✅ Group alert saved to Firebase');
-  } catch (e, st) {
-    debugPrint('❌ Group alert error: $e\n$st');
-    // Don't crash - just log
   }
-}
 
-/// Save smoking alert with Supabase upload
-Future<void> _saveSmokingAlert(String lensName) async {
-  try {
-    String? imageUrl;
-    
-    if (_currentFramePath != null && await File(_currentFramePath!).exists()) {
-      try {
-        final result = await ImageUploaderService.saveAndUploadAlertImage(
-          sourcePath: _currentFramePath!,
-          alertType: 'smoking_detected',
-          additionalInfo: '',
-        );
-        
-        imageUrl = result['remote'];
-        
-        if (imageUrl != null) {
-          debugPrint('✅ Smoking image uploaded');
-        } else {
-          debugPrint('⚠️ Upload returned null, continuing without image');
+  /// Save smoking alert
+  Future<void> _saveSmokingAlert(String lensName) async {
+    try {
+      String? imageUrl;
+      
+      if (_currentFramePath != null && await File(_currentFramePath!).exists()) {
+        try {
+          final result = await ImageUploaderService.saveAndUploadAlertImage(
+            sourcePath: _currentFramePath!,
+            alertType: 'smoking_detected',
+            additionalInfo: '',
+          );
+          
+          imageUrl = result['remote'];
+          
+          if (imageUrl != null) {
+            debugPrint('✅ Smoking image uploaded');
+          }
+        } catch (uploadError) {
+          debugPrint('⚠️ Upload failed, continuing without image');
         }
-      } catch (uploadError) {
-        debugPrint('⚠️ Upload failed, saving alert without image: $uploadError');
       }
+      
+      final position = await _getCurrentLocation();
+      
+      await _alertService.createSmokingAlert(
+        lens: lensName,
+        imagePath: imageUrl,
+        latitude: position?.latitude,
+        longitude: position?.longitude,
+        locationName: position != null
+            ? '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}'
+            : null,
+      );
+      debugPrint('✅ Smoking alert saved to Firebase');
+    } catch (e, st) {
+      debugPrint('❌ Smoking alert error: $e\n$st');
     }
-    
-    final position = await _getCurrentLocation();
-    
-    // ✅ Always save alert, even if image upload failed
-    await _alertService.createSmokingAlert(
-      lens: lensName,
-      imagePath: imageUrl,
-      latitude: position?.latitude,
-      longitude: position?.longitude,
-      locationName: position != null
-          ? '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}'
-          : null,
-    );
-    debugPrint('✅ Smoking alert saved to Firebase');
-  } catch (e, st) {
-    debugPrint('❌ Smoking alert error: $e\n$st');
   }
-}
+
   void _onFrame(CameraImage image) {
     if (!_multi.isInitialized || !mounted) return;
     _frameCount++;
@@ -486,7 +523,7 @@ Future<void> _saveSmokingAlert(String lensName) async {
     
     _updateState(_state.copyWith(
       processingFace: true,
-      faceStatus: 'Scanning...',
+      faceStatus: 'Scanning faces...',
     ));
     
     XFile? shot;
@@ -549,7 +586,7 @@ Future<void> _saveSmokingAlert(String lensName) async {
         _lastVerificationTime = DateTime.now();
         
         if (mounted) {
-          _updateState(_state.copyWith(faceStatus: 'No face'));
+          _updateState(_state.copyWith(faceStatus: 'No face detected'));
         }
         
         _scheduleImageCleanup(shot.path);
@@ -557,8 +594,6 @@ Future<void> _saveSmokingAlert(String lensName) async {
       }
       
       if (!mounted) return;
-      
-      debugPrint('👤 Found ${faceInfos.length} face(s)');
       
       int totalDetectedFaces = faceInfos.length;
       
@@ -576,9 +611,8 @@ Future<void> _saveSmokingAlert(String lensName) async {
         }
       }
       
-      debugPrint('📊 Distance: ${validFaces.length} good, $_facesTooFar far, $_facesTooClose close');
-      
-      _lastVerifiedPeopleCount = totalDetectedFaces;
+      // ✅ Update verified count for hybrid detection
+      _lastVerifiedPeopleCount = validFaces.length;
       _lastVerificationTime = DateTime.now();
       
       if (validFaces.isEmpty) {
@@ -595,8 +629,6 @@ Future<void> _saveSmokingAlert(String lensName) async {
         _scheduleImageCleanup(shot.path);
         return;
       }
-      
-      debugPrint('🔍 Verifying ${validFaces.length} face(s)');
       
       _currentDetectedFaces = validFaces;
       final results = await _verifyFacesWithYield(validFaces);
@@ -656,7 +688,6 @@ Future<void> _saveSmokingAlert(String lensName) async {
     _imageCleanupTimer = Timer(Duration(seconds: 5), () {
       try {
         File(imagePath).deleteSync();
-        debugPrint('🧹 Cleaned up: ${imagePath.split('/').last}');
       } catch (_) {}
     });
   }
@@ -701,12 +732,11 @@ Future<void> _saveSmokingAlert(String lensName) async {
       debugPrint('📊 Verification: ${knownNames.length} known + $unknownCount unknown');
 
       if (hasUnknownFace && unknownCount > 0) {
-        debugPrint('🚨 SAVING UNKNOWN FACE ALERT');
+        debugPrint('🚨 UNKNOWN FACE DETECTED');
         
         final lensName = _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
         final position = await _getCurrentLocation();
         
-        // Upload frame to Supabase
         String? frameUrl;
         try {
           final frameResult = await ImageUploaderService.saveAndUploadAlertImage(
@@ -716,10 +746,9 @@ Future<void> _saveSmokingAlert(String lensName) async {
           );
           frameUrl = frameResult['remote'];
         } catch (e) {
-          debugPrint('❌ Frame upload: $e');
+          debugPrint('⚠️ Frame upload failed');
         }
         
-        // Upload face crops to Supabase
         List<String> faceUrls = [];
         try {
           if (detectedFaces.isNotEmpty) {
@@ -728,13 +757,11 @@ Future<void> _saveSmokingAlert(String lensName) async {
               alertType: 'unknown_face',
               sessionInfo: 'u${unknownCount}_k${knownNames.length}',
             );
-            debugPrint('✅ Uploaded ${faceUrls.length} face crops');
           }
         } catch (e) {
-          debugPrint('❌ Face upload: $e');
+          debugPrint('⚠️ Face upload failed');
         }
         
-        // Save to Firebase with Supabase URLs
         await _alertService.createUnknownAlert(
           threshold: FaceVerificationService.threshold,
           lens: lensName,

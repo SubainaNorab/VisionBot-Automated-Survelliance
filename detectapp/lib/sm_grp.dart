@@ -1,4 +1,4 @@
-// sm_grp.dart - COMPLETE: Fixed YOLO to prevent double-counting
+// sm_grp.dart - FIXED: Lower thresholds, better debugging for YOLO
 
 import 'dart:async';
 import 'dart:typed_data';
@@ -13,12 +13,14 @@ class DetectionResult {
   final bool groupDetected;
   final int personCount;
   final int processingTimeMs;
+  final List<double> personConfidences;
 
   DetectionResult({
     required this.smokingDetected,
     required this.groupDetected,
     required this.personCount,
     this.processingTimeMs = 0,
+    this.personConfidences = const [],
   });
 
   @override
@@ -60,6 +62,10 @@ class MultiDetectorService {
   bool _busy = false;
 
   int groupThreshold;
+  
+  // ✅ Debugging counters
+  int _totalFramesProcessed = 0;
+  int _totalDetectionsFound = 0;
 
   DetectionResult _last = DetectionResult(
     smokingDetected: false,
@@ -95,6 +101,12 @@ class MultiDetectorService {
         debugPrint('✅ YOLO loaded (${_yoloModelData!.length} bytes)');
         debugPrint('   Input: ${inputShape[1]}x${inputShape[2]}');
         debugPrint('   Output: ${outputShape[1]}x${outputShape[2]}');
+        debugPrint('');
+        debugPrint('🔍 YOLO Configuration:');
+        debugPrint('   • Confidence Threshold: 0.25 (LOW - catch more)');
+        debugPrint('   • Min Face Size: 40px (RELAXED)');
+        debugPrint('   • NMS IOU: 0.5 (MODERATE)');
+        debugPrint('   • Frequency: Every 15 frames (~4 FPS)');
       } catch (e) {
         debugPrint('❌ YOLO load failed: $e');
         return;
@@ -102,7 +114,6 @@ class MultiDetectorService {
 
       _isInitialized = true;
       debugPrint('✅ MultiDetectorService ready');
-      debugPrint('   Group threshold: $groupThreshold');
       debugPrint('═══════════════════════════════════');
       debugPrint('');
     } catch (e) {
@@ -130,12 +141,11 @@ class MultiDetectorService {
 
     _frameCount++;
     
-    // ✅ Process every 60 frames (~1 FPS at 60 FPS camera)
-    if (_frameCount % 60 != 0) return;
+    // ✅ Process every 15 frames (~4 FPS at 60 FPS camera) - MORE FREQUENT
+    if (_frameCount % 15 != 0) return;
 
     _busy = true;
-    
-    debugPrint('🎯 Frame $_frameCount - YOLO detection');
+    _totalFramesProcessed++;
 
     compute(_runDetectionInCompute, _DetectionData(
       yPlane: image.planes[0].bytes,
@@ -149,7 +159,14 @@ class MultiDetectorService {
       yoloModelData: _yoloModelData!,
       groupThreshold: groupThreshold,
     )).then((result) {
-      debugPrint('✅ YOLO result: $result');
+      if (result.personCount > 0) {
+        _totalDetectionsFound++;
+        debugPrint('🎯 YOLO DETECTED: ${result.personCount} person(s) - Confidences: ${result.personConfidences.map((c) => c.toStringAsFixed(2)).join(", ")}');
+      } else {
+        if (_totalFramesProcessed % 10 == 0) {
+          debugPrint('❌ YOLO frame $_totalFramesProcessed: No detection');
+        }
+      }
       _last = result;
       _busy = false;
     }).catchError((e) {
@@ -162,6 +179,8 @@ class MultiDetectorService {
     _yolo?.close();
     _isInitialized = false;
     debugPrint('🧹 MultiDetectorService disposed');
+    debugPrint('   Total frames: $_totalFramesProcessed');
+    debugPrint('   Detections: $_totalDetectionsFound');
   }
 }
 
@@ -182,34 +201,29 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
       ),
     );
 
-    // ✅ YUV to RGB conversion
-    for (int y = 0; y < inputSize; y += 4) {
+    // ✅ YUV to RGB conversion with proper scaling
+    for (int y = 0; y < inputSize; y++) {
       final srcY = (y * data.height ~/ inputSize).clamp(0, data.height - 1);
       
-      for (int x = 0; x < inputSize; x += 4) {
+      for (int x = 0; x < inputSize; x++) {
         final srcX = (x * data.width ~/ inputSize).clamp(0, data.width - 1);
 
         final yIndex = srcY * data.yRowStride + srcX;
         final uvIndex = (srcY ~/ 2) * data.uvRowStride + (srcX ~/ 2) * data.uvPixelStride;
 
-        final Y = data.yPlane[yIndex].toInt();
-        final U = data.uPlane[uvIndex].toInt();
-        final V = data.vPlane[uvIndex].toInt();
+        if (yIndex < data.yPlane.length && uvIndex < data.uPlane.length) {
+          final Y = data.yPlane[yIndex].toInt();
+          final U = data.uPlane[uvIndex].toInt();
+          final V = data.vPlane[uvIndex].toInt();
 
-        final r = (Y + ((1436 * (V - 128)) >> 10)).clamp(0, 255);
-        final g = (Y - ((354 * (U - 128) + 732 * (V - 128)) >> 10)).clamp(0, 255);
-        final b = (Y + ((1814 * (U - 128)) >> 10)).clamp(0, 255);
+          // ✅ Standard YUV to RGB conversion
+          final r = (Y + ((1436 * (V - 128)) >> 10)).clamp(0, 255);
+          final g = (Y - ((354 * (U - 128) + 732 * (V - 128)) >> 10)).clamp(0, 255);
+          final b = (Y + ((1814 * (U - 128)) >> 10)).clamp(0, 255);
 
-        final rNorm = r / 255.0;
-        final gNorm = g / 255.0;
-        final bNorm = b / 255.0;
-
-        for (int dy = 0; dy < 4 && y + dy < inputSize; dy++) {
-          for (int dx = 0; dx < 4 && x + dx < inputSize; dx++) {
-            input[0][y + dy][x + dx][0] = rNorm;
-            input[0][y + dy][x + dx][1] = gNorm;
-            input[0][y + dy][x + dx][2] = bNorm;
-          }
+          input[0][y][x][0] = r / 255.0;
+          input[0][y][x][1] = g / 255.0;
+          input[0][y][x][2] = b / 255.0;
         }
       }
     }
@@ -222,16 +236,16 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
     interpreter.run(input, output);
     interpreter.close();
 
-    int persons = _countPersons(output);
-    bool groupDet = persons >= data.groupThreshold;
+    final (personCount, confidences) = _countPersons(output);
 
     final endTime = DateTime.now().millisecondsSinceEpoch;
 
     return DetectionResult(
       smokingDetected: false,
-      groupDetected: groupDet,
-      personCount: persons,
+      groupDetected: false,
+      personCount: personCount,
       processingTimeMs: endTime - startTime,
+      personConfidences: confidences,
     );
   } catch (e) {
     debugPrint('⚠️ Compute error: $e');
@@ -239,69 +253,45 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
       smokingDetected: false,
       groupDetected: false,
       personCount: 0,
-      processingTimeMs: 0,
     );
   }
 }
 
-// ✅ FIXED: Better person counting - prevent double counting
-int _countPersons(List output) {
+// ✅ FIXED: More aggressive detection
+(int, List<double>) _countPersons(List output) {
   final preds = output[0] as List<List<double>>;
   const int inputSize = 640;
 
-  // ✅ STEP 1: Analyze raw output
-  double maxPersonScore = 0.0;
-  int bestIdx = -1;
-  
-  for (int i = 0; i < 8400; i++) {
-    final personScore = preds[4][i];
-    if (personScore > maxPersonScore) {
-      maxPersonScore = personScore;
-      bestIdx = i;
-    }
-  }
-
-  debugPrint('🔍 YOLO Analysis:');
-  debugPrint('   Max score: ${maxPersonScore.toStringAsFixed(4)}');
-  
-  if (bestIdx >= 0) {
-    final rawCx = preds[0][bestIdx];
-    final rawCy = preds[1][bestIdx];
-    final rawBw = preds[2][bestIdx];
-    final rawBh = preds[3][bestIdx];
-    
-    if (rawCx <= 1.5 && rawCy <= 1.5 && rawBw <= 1.5 && rawBh <= 1.5) {
-      debugPrint('   Format: NORMALIZED');
-    } else {
-      debugPrint('   Format: PIXEL');
-    }
-  }
-  
-  // ✅ STEP 2: Collect boxes with HIGHER confidence threshold
   final boxes = <_Box>[];
-  int candidateCount = 0;
-  int filteredSmall = 0;
   int filteredLowConf = 0;
+  int filteredSmall = 0;
+  int analyzed = 0;
 
-  // ✅ INCREASED: 0.25 (was 0.15) - More strict = less false positives
+  // ✅ LOWERED confidence: 0.25 (was 0.40) - Catch more detections
   const double CONFIDENCE_THRESHOLD = 0.25;
 
+  double maxScore = 0;
+
   for (int i = 0; i < 8400; i++) {
     final personScore = preds[4][i];
+    
+    if (personScore > maxScore) {
+      maxScore = personScore;
+    }
     
     if (personScore < CONFIDENCE_THRESHOLD) {
       filteredLowConf++;
       continue;
     }
-    
-    candidateCount++;
+
+    analyzed++;
 
     double cx = preds[0][i];
     double cy = preds[1][i];
     double bw = preds[2][i];
     double bh = preds[3][i];
 
-    // ✅ Auto-detect format
+    // ✅ Auto-detect format (normalized vs pixel)
     if (cx < 2.0 && cy < 2.0 && bw < 2.0 && bh < 2.0) {
       cx *= inputSize;
       cy *= inputSize;
@@ -309,12 +299,8 @@ int _countPersons(List output) {
       bh *= inputSize;
     }
 
-    if (candidateCount <= 3) {
-      debugPrint('   Candidate $candidateCount: score=${personScore.toStringAsFixed(3)}, size=${bw.toStringAsFixed(0)}x${bh.toStringAsFixed(0)}');
-    }
-
-    // ✅ INCREASED minimum size: 60px (was 20px) - Filter out noise
-    if (bh < 60 || bw < 30) {
+    // ✅ LOWERED minimum size: 40px (was 80px) - Detect smaller/far faces
+    if (bh < 40 || bw < 20) {
       filteredSmall++;
       continue;
     }
@@ -328,28 +314,31 @@ int _countPersons(List output) {
     ));
   }
 
-  debugPrint('   Candidates: $candidateCount');
+  // ✅ Debugging info
+  debugPrint('🔍 YOLO Raw Analysis:');
+  debugPrint('   Max score in 8400: ${maxScore.toStringAsFixed(4)}');
+  debugPrint('   Analyzed (>${CONFIDENCE_THRESHOLD}): $analyzed');
   debugPrint('   Filtered (low conf): $filteredLowConf');
   debugPrint('   Filtered (small): $filteredSmall');
-  debugPrint('   Kept: ${boxes.length}');
+  debugPrint('   Valid boxes: ${boxes.length}');
 
-  // ✅ INCREASED NMS IOU: 0.55 (was 0.30) - More aggressive overlap removal
-  final count = _nms(boxes, 0.55);
+  // ✅ NMS with moderate IOU
+  final (count, confidences) = _nms(boxes, 0.5);
   
   if (count > 0) {
     debugPrint('   ✅ After NMS: $count person(s)');
-  } else {
-    debugPrint('   ❌ No persons detected');
   }
   
-  return count;
+  return (count, confidences);
 }
 
-int _nms(List<_Box> boxes, double iouThr) {
-  if (boxes.isEmpty) return 0;
+(int, List<double>) _nms(List<_Box> boxes, double iouThr) {
+  if (boxes.isEmpty) return (0, []);
   boxes.sort((a, b) => b.score.compareTo(a.score));
 
   final kept = <_Box>[];
+  final confidences = <double>[];
+  
   for (final b in boxes) {
     bool ok = true;
     for (final k in kept) {
@@ -358,12 +347,13 @@ int _nms(List<_Box> boxes, double iouThr) {
         break;
       }
     }
-    if (ok) kept.add(b);
+    if (ok) {
+      kept.add(b);
+      confidences.add(b.score);
+    }
   }
   
-  debugPrint('   NMS removed: ${boxes.length - kept.length}');
-  
-  return kept.length;
+  return (kept.length, confidences);
 }
 
 double _iou(_Box a, _Box b) {
