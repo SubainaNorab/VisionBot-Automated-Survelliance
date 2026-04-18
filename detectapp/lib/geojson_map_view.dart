@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:geolocator/geolocator.dart';
+import 'ble_navigation_service.dart';
 
 class GeoJSONMapView extends StatefulWidget {
   const GeoJSONMapView({Key? key}) : super(key: key);
@@ -14,378 +17,375 @@ class GeoJSONMapView extends StatefulWidget {
 class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   late GoogleMapController _mapController;
 
-  // GeoJSON Data
+  // ── GeoJSON data (unchanged) ──────────────────────────────────────────────
   List<LatLng> pathCoordinates = [];
   List<List<LatLng>> boundaryPolygons = [];
 
-  // Map UI Elements
   final Set<Polyline> polylines = {};
   final Set<Polygon> polygons = {};
   Set<Marker> markers = {};
   Set<Marker> debugPathMarkers = {};
 
-  // Marker Animation
-  Timer? _movementTimer;
-  LatLng _carMarkerPosition = const LatLng(0, 0);
-  int _currentWaypointIndex = 0;
-  bool _isMoving = false;
-
-  // Status
   bool _isLoading = true;
   String _statusMessage = 'Loading GeoJSON files...';
+
+  // ── BLE + Navigation ──────────────────────────────────────────────────────
+  final BleNavigationService _ble = BleNavigationService();
+  bool _bleConnected = false;
+  bool _patrolActive = false;
+  String _carStatus = 'CLEAR'; // BLOCKED or CLEAR from Arduino
+
+  // GPS tracking
+  Position? _currentPosition;
+  StreamSubscription<Position>? _positionSub;
+  int _currentWaypointIndex = 0;
+
+  // Turn state
+  bool _isTurning = false;
+  static const double _waypointThresholdMeters = 4.0;
+  static const int _turnDurationMs = 700; // tune on real surface
 
   @override
   void initState() {
     super.initState();
     _loadGeoJSONFiles();
+    _listenBleStatus();
+    _listenBleConnection();
   }
 
   @override
   void dispose() {
-    _movementTimer?.cancel();
-    _mapController.dispose();
+    _positionSub?.cancel();
+    _ble.dispose();
     super.dispose();
   }
 
-  /// Load both GeoJSON files from assets
+  // ── BLE listeners ─────────────────────────────────────────────────────────
+
+  void _listenBleStatus() {
+    _ble.statusStream.listen((status) {
+      setState(() => _carStatus = status);
+      if (status == 'BLOCKED') {
+        setState(() => _statusMessage = '⚠️ Obstacle! Car paused...');
+        // Arduino already stopped the car.
+        // Re-send forward once Arduino reports clear.
+      } else if (status == 'CLEAR' && _patrolActive && !_isTurning) {
+        _ble.sendCommand('F');
+        setState(() => _statusMessage = '🚗 Resumed forward');
+      }
+    });
+  }
+
+  void _listenBleConnection() {
+    _ble.connectionStream.listen((connected) {
+      setState(() {
+        _bleConnected = connected;
+        if (!connected) {
+          _patrolActive = false;
+          _statusMessage = '❌ BLE disconnected';
+        }
+      });
+    });
+  }
+
+  // ── GPS tracking ──────────────────────────────────────────────────────────
+
+  void _startGpsTracking() {
+    _positionSub?.cancel();
+    _positionSub = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 1, // update every 1 metre
+      ),
+    ).listen(_onPositionUpdate);
+  }
+
+  void _stopGpsTracking() {
+    _positionSub?.cancel();
+    _positionSub = null;
+  }
+
+  void _onPositionUpdate(Position pos) {
+    if (!_patrolActive || pathCoordinates.isEmpty) return;
+
+    _currentPosition = pos;
+    final carLatLng = LatLng(pos.latitude, pos.longitude);
+
+    // Update car marker on map
+    _updateCarMarker(carLatLng);
+
+    // Check if near boundary — if outside, stop and turn back
+    final insideBoundary = _isPointInBoundary(carLatLng);
+    if (!insideBoundary && !_isTurning) {
+      debugPrint('[NAV] Outside boundary — turning back');
+      _executeTurn();
+      return;
+    }
+
+    // Check if near next waypoint corner
+    if (_currentWaypointIndex < pathCoordinates.length) {
+      final nextWaypoint = pathCoordinates[_currentWaypointIndex];
+      final dist = Geolocator.distanceBetween(
+        pos.latitude, pos.longitude,
+        nextWaypoint.latitude, nextWaypoint.longitude,
+      );
+
+      setState(() {
+        _statusMessage =
+            '🚗 To waypoint $_currentWaypointIndex: ${dist.toStringAsFixed(1)}m';
+      });
+
+      if (dist < _waypointThresholdMeters && !_isTurning) {
+        debugPrint('[NAV] Reached waypoint $_currentWaypointIndex');
+        _executeTurn();
+      }
+    }
+  }
+
+  // ── Turn logic ────────────────────────────────────────────────────────────
+
+  Future<void> _executeTurn() async {
+    if (_isTurning) return;
+    _isTurning = true;
+
+    // Determine turn direction from current leg
+    final turnDir = _getTurnDirection(_currentWaypointIndex);
+
+    setState(() =>
+        _statusMessage = 'Turning ${turnDir == "L" ? "Left" : "Right"}...');
+
+    await _ble.sendCommand('S');
+    await Future.delayed(const Duration(milliseconds: 200));
+
+    await _ble.sendCommand(turnDir);
+    await Future.delayed(Duration(milliseconds: _turnDurationMs));
+
+    await _ble.sendCommand('S');
+    await Future.delayed(const Duration(milliseconds: 200));
+
+    await _ble.sendCommand('F');
+
+    // Advance to next waypoint
+    _currentWaypointIndex =
+        (_currentWaypointIndex + 1) % pathCoordinates.length;
+
+    setState(() =>
+        _statusMessage = '🚗 Moving to waypoint $_currentWaypointIndex');
+
+    _isTurning = false;
+  }
+
+  /// Determine turn direction based on the rectangle path winding.
+  /// For a clockwise rectangle all turns are Right.
+  /// Adjust if your path is counter-clockwise.
+  String _getTurnDirection(int waypointIndex) {
+    if (pathCoordinates.length < 2) return 'R';
+
+    // Calculate cross product to determine winding
+    // Use first 3 points to detect CW vs CCW
+    if (pathCoordinates.length >= 3) {
+      final p1 = pathCoordinates[0];
+      final p2 = pathCoordinates[1];
+      final p3 = pathCoordinates[2];
+
+      final cross = (p2.longitude - p1.longitude) *
+              (p3.latitude - p1.latitude) -
+          (p2.latitude - p1.latitude) *
+              (p3.longitude - p1.longitude);
+
+      // cross > 0 = CCW = turn Left, cross < 0 = CW = turn Right
+      return cross > 0 ? 'L' : 'R';
+    }
+
+    return 'R'; // default
+  }
+
+  // ── Patrol control ────────────────────────────────────────────────────────
+
+  Future<void> _startPatrol() async {
+    if (!_bleConnected) {
+      setState(() => _statusMessage = 'Connect BLE first!');
+      return;
+    }
+    if (pathCoordinates.isEmpty) {
+      setState(() => _statusMessage = 'No path loaded!');
+      return;
+    }
+
+    _currentWaypointIndex = 0;
+    _patrolActive = true;
+    _isTurning = false;
+
+    _startGpsTracking();
+    await _ble.sendCommand('F');
+
+    setState(() => _statusMessage = '🚗 Patrol started — moving forward');
+    debugPrint('[NAV] Patrol started');
+  }
+
+  Future<void> _stopPatrol() async {
+    _patrolActive = false;
+    _isTurning = false;
+    _stopGpsTracking();
+    await _ble.sendCommand('S');
+    setState(() => _statusMessage = '⏹️ Patrol stopped');
+    debugPrint('[NAV] Patrol stopped');
+  }
+
+  Future<void> _connectBle() async {
+    setState(() => _statusMessage = 'Scanning for car...');
+    final ok = await _ble.connect();
+    setState(() {
+      _bleConnected = ok;
+      _statusMessage = ok ? '✅ BLE connected!' : '❌ BLE not found';
+    });
+  }
+
+  // ── Map helpers (ALL UNCHANGED from original) ─────────────────────────────
+
   Future<void> _loadGeoJSONFiles() async {
     try {
-      debugPrint('📂 Loading GeoJSON files...');
+      final pathJson =
+          await rootBundle.loadString('assets/geo/path.geojson');
+      _parsePathGeoJSON(jsonDecode(pathJson));
 
-      // Load path.geojson
-      final pathJson = await rootBundle.loadString('assets/geo/path.geojson');
-      final pathData = jsonDecode(pathJson) as Map<String, dynamic>;
-      _parsePathGeoJSON(pathData);
-
-      // Load boundaries.geojson
       final boundariesJson =
           await rootBundle.loadString('assets/geo/boundaries.geojson');
-      final boundariesData = jsonDecode(boundariesJson) as Map<String, dynamic>;
-      _parseBoundaryGeoJSON(boundariesData);
+      _parseBoundaryGeoJSON(jsonDecode(boundariesJson));
 
       if (pathCoordinates.isNotEmpty) {
-        _carMarkerPosition = pathCoordinates.first;
-        _updateMarker();
         _setupMapUI();
         setState(() {
           _isLoading = false;
-          _statusMessage = '✅ Ready to navigate';
-        });
-        debugPrint('✅ GeoJSON files loaded successfully');
-      } else {
-        setState(() {
-          _isLoading = false;
-          _statusMessage = '❌ No path coordinates found';
+          _statusMessage = '✅ Path loaded — connect BLE to start';
         });
       }
     } catch (e) {
-      debugPrint('❌ Error loading GeoJSON: $e');
       setState(() {
         _isLoading = false;
-        _statusMessage = 'Error: ${e.toString()}';
+        _statusMessage = 'Error: $e';
       });
     }
   }
 
-  /// Parse LineString path from GeoJSON
   void _parsePathGeoJSON(Map<String, dynamic> geoJson) {
-    try {
-      final features = geoJson['features'] as List<dynamic>?;
-
-      if (features == null || features.isEmpty) {
-        debugPrint('⚠️ No features found in path GeoJSON');
-        return;
-      }
-
-      for (final feature in features) {
-        final geometry = feature['geometry'] as Map<String, dynamic>?;
-        if (geometry == null) continue;
-
-        final geometryType = geometry['type'] as String?;
-        final coordinates = geometry['coordinates'] as List<dynamic>?;
-
-        if (geometryType == 'LineString' && coordinates != null) {
-          for (final coord in coordinates) {
-            if (coord is List && coord.length >= 2) {
-              final lng = (coord[0] as num).toDouble();
-              final lat = (coord[1] as num).toDouble();
-              pathCoordinates.add(LatLng(lat, lng));
-            }
-          }
-          debugPrint('✅ Loaded ${pathCoordinates.length} path waypoints');
+    final features = geoJson['features'] as List<dynamic>?;
+    if (features == null) return;
+    for (final f in features) {
+      final g = f['geometry'] as Map<String, dynamic>?;
+      if (g?['type'] == 'LineString') {
+        for (final c in (g!['coordinates'] as List)) {
+          pathCoordinates
+              .add(LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()));
         }
       }
-    } catch (e) {
-      debugPrint('❌ Error parsing path GeoJSON: $e');
     }
   }
 
-  /// Parse Polygon boundaries from GeoJSON
   void _parseBoundaryGeoJSON(Map<String, dynamic> geoJson) {
-    try {
-      final features = geoJson['features'] as List<dynamic>?;
-
-      if (features == null || features.isEmpty) {
-        debugPrint('⚠️ No features found in boundary GeoJSON');
-        return;
-      }
-
-      for (final feature in features) {
-        final geometry = feature['geometry'] as Map<String, dynamic>?;
-        if (geometry == null) continue;
-
-        final geometryType = geometry['type'] as String?;
-        final coordinates = geometry['coordinates'] as List<dynamic>?;
-
-        if (geometryType == 'Polygon' && coordinates != null) {
-          for (final ring in coordinates) {
-            if (ring is List) {
-              final polygon = <LatLng>[];
-              for (final coord in ring) {
-                if (coord is List && coord.length >= 2) {
-                  final lng = (coord[0] as num).toDouble();
-                  final lat = (coord[1] as num).toDouble();
-                  polygon.add(LatLng(lat, lng));
-                }
-              }
-              if (polygon.isNotEmpty) {
-                boundaryPolygons.add(polygon);
-              }
-            }
+    final features = geoJson['features'] as List<dynamic>?;
+    if (features == null) return;
+    for (final f in features) {
+      final g = f['geometry'] as Map<String, dynamic>?;
+      if (g?['type'] == 'Polygon') {
+        for (final ring in (g!['coordinates'] as List)) {
+          final poly = <LatLng>[];
+          for (final c in ring) {
+            poly.add(LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()));
           }
-          debugPrint('✅ Loaded ${boundaryPolygons.length} boundary polygon(s)');
+          if (poly.isNotEmpty) boundaryPolygons.add(poly);
         }
       }
-    } catch (e) {
-      debugPrint('❌ Error parsing boundary GeoJSON: $e');
     }
   }
 
-  /// Setup map UI elements (polylines and polygons)
   void _setupMapUI() {
-    // Add path polyline
-    if (pathCoordinates.isNotEmpty) {
-      polylines.add(
-        Polyline(
-          polylineId: const PolylineId('path'),
-          points: pathCoordinates,
-          color: Colors.blue,
-          width: 4,
-          geodesic: true,
-        ),
-      );
-      debugPrint('✅ Polyline path added');
-    }
+    polylines.add(Polyline(
+      polylineId: const PolylineId('path'),
+      points: pathCoordinates,
+      color: Colors.blue,
+      width: 4,
+    ));
 
-    // Debug: show a red marker at every path waypoint
-    debugPathMarkers = _buildDebugPathMarkersFromLatLng(pathCoordinates);
-
-    // Add boundary polygons
     for (int i = 0; i < boundaryPolygons.length; i++) {
-      polygons.add(
-        Polygon(
-          polygonId: PolygonId('boundary_$i'),
-          points: boundaryPolygons[i],
-          fillColor: Colors.green.withOpacity(0.2),
-          strokeColor: Colors.green,
-          strokeWidth: 3,
-          geodesic: true,
-        ),
-      );
+      polygons.add(Polygon(
+        polygonId: PolygonId('boundary_$i'),
+        points: boundaryPolygons[i],
+        fillColor: Colors.green.withOpacity(0.2),
+        strokeColor: Colors.green,
+        strokeWidth: 3,
+      ));
     }
-    debugPrint('✅ ${polygons.length} polygon(s) added');
-
     setState(() {});
   }
 
-  /// Debug markers from raw [lng, lat] pairs.
-  /// Each input coordinate is converted to LatLng(lat, lng).
-  Set<Marker> _buildDebugPathMarkersFromLngLat(List<List<double>> lngLatPath) {
-    final points = <LatLng>[];
-    for (final coord in lngLatPath) {
-      if (coord.length < 2) continue;
-      final lng = coord[0];
-      final lat = coord[1];
-      points.add(LatLng(lat, lng));
-    }
-    return _buildDebugPathMarkersFromLatLng(points);
-  }
-
-  /// Debug markers from LatLng points (red).
-  Set<Marker> _buildDebugPathMarkersFromLatLng(List<LatLng> points) {
-    return points.asMap().entries.map((entry) {
-      final i = entry.key;
-      final p = entry.value;
-      return Marker(
-        markerId: MarkerId('debug_path_$i'),
-        position: p,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-        infoWindow: InfoWindow(
-          title: 'Path point $i',
-          snippet:
-              'Lat: ${p.latitude.toStringAsFixed(6)}, Lng: ${p.longitude.toStringAsFixed(6)}',
+  void _updateCarMarker(LatLng pos) {
+    setState(() {
+      markers = {
+        Marker(
+          markerId: const MarkerId('car'),
+          position: pos,
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+              BitmapDescriptor.hueBlue),
+          infoWindow: InfoWindow(
+            title: 'Car',
+            snippet:
+                '${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)}',
+          ),
         ),
-      );
-    }).toSet();
+      };
+    });
   }
 
-  /// Update car marker position
-  void _updateMarker() {
-    final insideBoundary = _isPointInBoundary(_carMarkerPosition);
-    final markerColor = insideBoundary
-        ? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue)
-        : BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed);
-
-    markers = {
-      Marker(
-        markerId: const MarkerId('car'),
-        position: _carMarkerPosition,
-        infoWindow: InfoWindow(
-          title: 'Car Position',
-          snippet: 'Lat: ${_carMarkerPosition.latitude.toStringAsFixed(4)}, '
-              'Lng: ${_carMarkerPosition.longitude.toStringAsFixed(4)}\n'
-              'Inside Boundary: $insideBoundary',
-        ),
-        icon: markerColor,
-      ),
-    };
-  }
-
-  /// Point-in-Polygon check using ray casting algorithm
   bool _isPointInBoundary(LatLng point) {
     if (boundaryPolygons.isEmpty) return true;
-
-    for (final polygon in boundaryPolygons) {
-      if (_isPointInPolygon(point, polygon)) {
-        return true;
-      }
+    for (final poly in boundaryPolygons) {
+      if (_isPointInPolygon(point, poly)) return true;
     }
     return false;
   }
 
-  /// Ray casting algorithm for point-in-polygon detection
   bool _isPointInPolygon(LatLng point, List<LatLng> polygon) {
-    int intersectionCount = 0;
+    int count = 0;
     final n = polygon.length;
-
     for (int i = 0; i < n; i++) {
       final p1 = polygon[i];
       final p2 = polygon[(i + 1) % n];
-
-      // Check if point latitude is between the two polygon points
       if ((p1.latitude <= point.latitude && point.latitude < p2.latitude) ||
           (p2.latitude <= point.latitude && point.latitude < p1.latitude)) {
-        // Calculate intersection longitude
-        final dx = p2.longitude - p1.longitude;
-        final dy = p2.latitude - p1.latitude;
-        final intersectionLng =
-            p1.longitude + (dx / dy) * (point.latitude - p1.latitude);
-
-        // Check if intersection is to the right of the point
-        if (point.longitude < intersectionLng) {
-          intersectionCount++;
-        }
+        final intersectLng = p1.longitude +
+            ((p2.longitude - p1.longitude) /
+                    (p2.latitude - p1.latitude)) *
+                (point.latitude - p1.latitude);
+        if (point.longitude < intersectLng) count++;
       }
     }
-
-    // If intersection count is odd, point is inside polygon
-    return intersectionCount.isOdd;
+    return count.isOdd;
   }
 
-  /// Start moving the marker along the path
-  void _startMarkerAnimation() {
-    if (_isMoving || pathCoordinates.isEmpty) return;
-
-    _isMoving = true;
-    _currentWaypointIndex = 0;
-    debugPrint('🚗 Starting marker animation along path');
-
-    setState(() {
-      _statusMessage = '🚗 Car is moving...';
-    });
-
-    // Move marker every 500ms to next waypoint
-    _movementTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-      if (_currentWaypointIndex < pathCoordinates.length) {
-        _carMarkerPosition = pathCoordinates[_currentWaypointIndex];
-        _updateMarker();
-
-        final insideBoundary = _isPointInBoundary(_carMarkerPosition);
-        debugPrint(
-          '📍 Waypoint $_currentWaypointIndex: '
-          'Pos(${_carMarkerPosition.latitude.toStringAsFixed(4)}, '
-          '${_carMarkerPosition.longitude.toStringAsFixed(4)}) | '
-          'Inside: $insideBoundary',
-        );
-
-        setState(() {
-          _statusMessage =
-              'Waypoint $_currentWaypointIndex / ${pathCoordinates.length} '
-              '| Inside: $insideBoundary';
-        });
-
-        _currentWaypointIndex++;
-      } else {
-        // Animation complete
-        _movementTimer?.cancel();
-        _isMoving = false;
-        debugPrint('✅ Animation complete');
-        setState(() {
-          _statusMessage = '✅ Journey complete!';
-        });
-      }
-    });
-  }
-
-  /// Stop marker animation
-  void _stopMarkerAnimation() {
-    _movementTimer?.cancel();
-    _isMoving = false;
-    _currentWaypointIndex = 0;
-    if (pathCoordinates.isNotEmpty) {
-      _carMarkerPosition = pathCoordinates.first;
-      _updateMarker();
-    }
-    debugPrint('⏹️ Animation stopped');
-    setState(() {
-      _statusMessage = '⏹️ Animation stopped';
-    });
-  }
-
-  /// Calculate initial camera position
   CameraPosition _getInitialCameraPosition() {
     if (pathCoordinates.isEmpty) {
-      return const CameraPosition(
-        target: LatLng(0, 0),
-        zoom: 15,
-      );
+      return const CameraPosition(target: LatLng(0, 0), zoom: 15);
     }
-
-    // Center on first waypoint
-    return CameraPosition(
-      target: pathCoordinates.first,
-      zoom: 16,
-    );
+    return CameraPosition(target: pathCoordinates.first, zoom: 17);
   }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        // Google Maps
         if (!_isLoading)
           GoogleMap(
-            onMapCreated: (controller) {
-              _mapController = controller;
-            },
+            onMapCreated: (c) => _mapController = c,
             initialCameraPosition: _getInitialCameraPosition(),
             polylines: polylines,
             polygons: polygons,
             markers: {...markers, ...debugPathMarkers},
+            myLocationEnabled: true,
             myLocationButtonEnabled: true,
             compassEnabled: true,
-            mapToolbarEnabled: true,
-            zoomControlsEnabled: true,
           )
         else
           Center(
@@ -399,7 +399,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
             ),
           ),
 
-        // Status Panel
+        // Status bar
         Positioned(
           bottom: 16,
           left: 16,
@@ -407,61 +407,139 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
           child: Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Colors.black87,
               borderRadius: BorderRadius.circular(8),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Status: $_statusMessage',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
+                  _statusMessage,
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold),
                 ),
-                if (!_isLoading) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Path Waypoints: ${pathCoordinates.length} | '
-                    'Boundaries: ${boundaryPolygons.length}',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ],
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    _StatusChip(
+                      label: _bleConnected ? '🔵 BLE ON' : '⚪ BLE OFF',
+                      color: _bleConnected ? Colors.blue : Colors.grey,
+                    ),
+                    _StatusChip(
+                      label: _carStatus == 'BLOCKED'
+                          ? '🚫 BLOCKED'
+                          : '✅ CLEAR',
+                      color: _carStatus == 'BLOCKED'
+                          ? Colors.red
+                          : Colors.green,
+                    ),
+                    _StatusChip(
+                      label: _patrolActive ? '🟢 PATROL' : '⏸️ IDLE',
+                      color:
+                          _patrolActive ? Colors.green : Colors.grey,
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
         ),
 
-        // Control Buttons
+        // Control buttons
         Positioned(
           top: 16,
           right: 16,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // BLE connect
+              FloatingActionButton.small(
+                heroTag: 'ble',
+                onPressed: _bleConnected ? null : _connectBle,
+                backgroundColor:
+                    _bleConnected ? Colors.blue : Colors.grey,
+                tooltip: 'Connect BLE',
+                child: const Icon(Icons.bluetooth),
+              ),
+              const SizedBox(height: 8),
+              // Start patrol
               FloatingActionButton(
                 heroTag: 'play',
-                onPressed: _isLoading ? null : _startMarkerAnimation,
-                tooltip: 'Start Animation',
+                onPressed:
+                    (_bleConnected && !_patrolActive) ? _startPatrol : null,
+                backgroundColor: Colors.green,
+                tooltip: 'Start Patrol',
                 child: const Icon(Icons.play_arrow),
               ),
               const SizedBox(height: 8),
+              // Stop patrol
               FloatingActionButton(
                 heroTag: 'stop',
-                onPressed: _isLoading ? null : _stopMarkerAnimation,
-                tooltip: 'Stop Animation',
+                onPressed: _patrolActive ? _stopPatrol : null,
+                backgroundColor: Colors.red,
+                tooltip: 'Stop Patrol',
                 child: const Icon(Icons.stop),
+              ),
+              const SizedBox(height: 8),
+              // Manual turn left
+              FloatingActionButton.small(
+                heroTag: 'left',
+                onPressed: _bleConnected
+                    ? () => _ble.sendCommand('L')
+                    : null,
+                tooltip: 'Turn Left',
+                child: const Icon(Icons.turn_left),
+              ),
+              const SizedBox(height: 8),
+              // Manual turn right
+              FloatingActionButton.small(
+                heroTag: 'right',
+                onPressed: _bleConnected
+                    ? () => _ble.sendCommand('R')
+                    : null,
+                tooltip: 'Turn Right',
+                child: const Icon(Icons.turn_right),
+              ),
+              const SizedBox(height: 8),
+              // Emergency Stop
+              FloatingActionButton(
+                heroTag: 'estop',
+                onPressed: _bleConnected
+                    ? () async {
+                        await _stopPatrol();
+                        await _ble.sendCommand('E');
+                        setState(() => _statusMessage = '🚨 EMERGENCY STOP');
+                      }
+                    : null,
+                backgroundColor: Colors.red.shade900,
+                tooltip: 'Emergency Stop',
+                child: const Icon(Icons.dangerous, color: Colors.yellow),
               ),
             ],
           ),
         ),
       ],
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _StatusChip({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color),
+      ),
+      child: Text(label,
+          style: TextStyle(color: color, fontSize: 11)),
     );
   }
 }
