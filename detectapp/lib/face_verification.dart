@@ -355,7 +355,7 @@ class FaceVerificationService {
 
       debugPrint('✅ Model loaded');
       debugPrint('   Input shape: ${inShape[0]}x${_inputW}x${_inputH}x${inShape[3]}');
-      debugPrint('   Output shape: ${outShape[0]}x${_embSize}');
+      debugPrint('   Output shape: ${outShape[0]}x$_embSize');
     } catch (e, st) {
       debugPrint('❌ Model load error: $e');
       debugPrint('   Stack: $st');
