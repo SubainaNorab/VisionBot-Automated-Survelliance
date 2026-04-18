@@ -370,104 +370,98 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('GeoJSON Map Navigation'),
-        elevation: 0,
-      ),
-      body: Stack(
-        children: [
-          // Google Maps
-          if (!_isLoading)
-            GoogleMap(
-              onMapCreated: (controller) {
-                _mapController = controller;
-              },
-              initialCameraPosition: _getInitialCameraPosition(),
-              polylines: polylines,
-              polygons: polygons,
-              markers: {...markers, ...debugPathMarkers},
-              myLocationButtonEnabled: true,
-              compassEnabled: true,
-              mapToolbarEnabled: true,
-              zoomControlsEnabled: true,
-            )
-          else
-            Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const CircularProgressIndicator(),
-                  const SizedBox(height: 16),
-                  Text(_statusMessage),
-                ],
-              ),
-            ),
-
-          // Status Panel
-          Positioned(
-            bottom: 16,
-            left: 16,
-            right: 16,
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Status: $_statusMessage',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  if (!_isLoading) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'Path Waypoints: ${pathCoordinates.length} | '
-                      'Boundaries: ${boundaryPolygons.length}',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-
-          // Control Buttons
-          Positioned(
-            top: 16,
-            right: 16,
+    return Stack(
+      children: [
+        // Google Maps
+        if (!_isLoading)
+          GoogleMap(
+            onMapCreated: (controller) {
+              _mapController = controller;
+            },
+            initialCameraPosition: _getInitialCameraPosition(),
+            polylines: polylines,
+            polygons: polygons,
+            markers: {...markers, ...debugPathMarkers},
+            myLocationButtonEnabled: true,
+            compassEnabled: true,
+            mapToolbarEnabled: true,
+            zoomControlsEnabled: true,
+          )
+        else
+          Center(
             child: Column(
-              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                FloatingActionButton(
-                  heroTag: 'play',
-                  onPressed: _isLoading ? null : _startMarkerAnimation,
-                  tooltip: 'Start Animation',
-                  child: const Icon(Icons.play_arrow),
-                ),
-                const SizedBox(height: 8),
-                FloatingActionButton(
-                  heroTag: 'stop',
-                  onPressed: _isLoading ? null : _stopMarkerAnimation,
-                  tooltip: 'Stop Animation',
-                  child: const Icon(Icons.stop),
-                ),
+                const CircularProgressIndicator(),
+                const SizedBox(height: 16),
+                Text(_statusMessage),
               ],
             ),
           ),
-        ],
-      ),
+
+        // Status Panel
+        Positioned(
+          bottom: 16,
+          left: 16,
+          right: 16,
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.2),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Status: $_statusMessage',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                if (!_isLoading) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Path Waypoints: ${pathCoordinates.length} | '
+                    'Boundaries: ${boundaryPolygons.length}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+
+        // Control Buttons
+        Positioned(
+          top: 16,
+          right: 16,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              FloatingActionButton(
+                heroTag: 'play',
+                onPressed: _isLoading ? null : _startMarkerAnimation,
+                tooltip: 'Start Animation',
+                child: const Icon(Icons.play_arrow),
+              ),
+              const SizedBox(height: 8),
+              FloatingActionButton(
+                heroTag: 'stop',
+                onPressed: _isLoading ? null : _stopMarkerAnimation,
+                tooltip: 'Stop Animation',
+                child: const Icon(Icons.stop),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
