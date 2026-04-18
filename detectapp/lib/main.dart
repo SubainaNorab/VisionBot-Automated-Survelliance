@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'firebase_options.dart';
 import 'geojson_map_view.dart';
 import 'survelliance_controller.dart';
+import 'custom_app_bar.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -104,51 +105,12 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
 
         return Scaffold(
           backgroundColor: Colors.black,
-          appBar: AppBar(
-            title: const Text(
-              'VisionBot',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            backgroundColor: Colors.blue.shade900,
-            elevation: 8,
-            toolbarHeight: 60,
-            bottom: TabBar(
-              controller: _tabController,
-              tabs: const [
-                Tab(
-                  icon: Icon(Icons.videocam, color: Colors.white),
-                  text: 'Surveillance',
-                ),
-                Tab(
-                  icon: Icon(Icons.location_on, color: Colors.white),
-                  text: 'Location',
-                ),
-              ],
-              labelColor: Colors.white,
-              unselectedLabelColor: Colors.grey.shade400,
-              indicatorColor: Colors.cyan,
-              indicatorSize: TabBarIndicatorSize.tab,
-            ),
-            actions: [
-              IconButton(
-                onPressed: () => _showDetectionSettings(context),
-                icon: const Icon(Icons.settings, size: 20),
-                tooltip: 'Detection Settings',
-                padding: const EdgeInsets.all(8),
-              ),
-              IconButton(
-                onPressed: _controller.switchCamera,
-                icon: const Icon(Icons.cameraswitch, size: 20),
-                tooltip: 'Switch Camera',
-                padding: const EdgeInsets.all(8),
-              ),
-              IconButton(
-                onPressed: state.processingFace ? null : _controller.verifyFace,
-                icon: const Icon(Icons.face, size: 20),
-                tooltip: 'Verify Face Now',
-                padding: const EdgeInsets.all(8),
-              ),
-            ],
+          appBar: VisionBotAppBar(
+            tabController: _tabController,
+            onSettingsPressed: () => _showDetectionSettings(context),
+            onSwitchCameraPressed: _controller.switchCamera,
+            onVerifyFacePressed: _controller.verifyFace,
+            isProcessingFace: state.processingFace,
           ),
           body: TabBarView(
             controller: _tabController,
@@ -252,7 +214,6 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
               ),
               const SizedBox(height: 16),
-
               ListTile(
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 8,
@@ -282,7 +243,6 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                   _showSnackbar('✅ Close range (1-2m)');
                 },
               ),
-
               Container(
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.green, width: 2),
@@ -318,7 +278,6 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                   },
                 ),
               ),
-
               ListTile(
                 contentPadding: const EdgeInsets.symmetric(
                   horizontal: 8,
@@ -632,9 +591,8 @@ class _YoloDetectionDisplay extends StatelessWidget {
                       Text(
                         'Smoke: ${smokingDetected ? "YES" : "NO"}',
                         style: TextStyle(
-                          color: smokingDetected
-                              ? Colors.redAccent
-                              : Colors.grey,
+                          color:
+                              smokingDetected ? Colors.redAccent : Colors.grey,
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
                         ),
