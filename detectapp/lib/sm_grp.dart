@@ -284,12 +284,12 @@ int _countPersons(List output) {
   int filteredLowConf = 0;
 
   // ✅ INCREASED: 0.25 (was 0.15) - More strict = less false positives
-  const double CONFIDENCE_THRESHOLD = 0.25;
+  const double confidenceThreshold = 0.25;
 
   for (int i = 0; i < 8400; i++) {
     final personScore = preds[4][i];
     
-    if (personScore < CONFIDENCE_THRESHOLD) {
+    if (personScore < confidenceThreshold) {
       filteredLowConf++;
       continue;
     }

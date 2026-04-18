@@ -174,7 +174,7 @@ class AlertImageService {
       }
       
       final sourceSize = await sourceFile.length();
-      debugPrint('   ✅ Source exists (${sourceSize} bytes)');
+      debugPrint('   ✅ Source exists ($sourceSize bytes)');
 
       final typeDir = Directory('${_alertImagesDir!.path}/$alertType');
       if (!await typeDir.exists()) {
@@ -191,7 +191,7 @@ class AlertImageService {
           .replaceAll(':', '-');
       
       final info = additionalInfo != null ? '_$additionalInfo' : '';
-      final filename = '${alertType}_${dateStr}_${timeStr}_${timestamp}$info.jpg';
+      final filename = '${alertType}_${dateStr}_${timeStr}_$timestamp$info.jpg';
       final destPath = '${typeDir.path}/$filename';
 
       debugPrint('   Copying to: $filename');
@@ -252,7 +252,7 @@ class AlertImageService {
           final face = faces[i];
           
           final info = sessionInfo != null ? '_$sessionInfo' : '';
-          final filename = '${alertType}_face${i + 1}_${dateStr}_${timeStr}_${timestamp}$info.jpg';
+          final filename = '${alertType}_face${i + 1}_${dateStr}_${timeStr}_$timestamp$info.jpg';
           final destPath = '${typeDir.path}/$filename';
 
           final bytes = img.encodeJpg(face, quality: 90);

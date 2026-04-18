@@ -80,7 +80,7 @@ class SurveillanceController {
   bool _continuousRunning = false;
 
   final Map<String, DateTime> _recentlyVerified = {};
-  final Duration _verificationCacheDuration = Duration(seconds: 30);
+  const Duration _verificationCacheDuration = Duration(seconds: 30);
 
   int _lastVerifiedFaceCount = 0;
   int _lastKnownCount = 0;
@@ -269,7 +269,7 @@ class SurveillanceController {
 
         if (_lastKnownCount > 0 || _lastUnknownCount > 0) {
           String peopleBreakdown =
-              ' (${_lastKnownCount} known, ${_lastUnknownCount} unknown';
+              ' ($_lastKnownCount known, $_lastUnknownCount unknown';
 
           if (yoloPeople > _lastVerifiedFaceCount) {
             peopleBreakdown +=
@@ -468,7 +468,7 @@ class SurveillanceController {
 
   void _scheduleImageCleanup(String imagePath) {
     _imageCleanupTimer?.cancel();
-    _imageCleanupTimer = Timer(Duration(seconds: 30), () {
+    _imageCleanupTimer = Timer(const Duration(seconds: 30), () {
       try {
         File(imagePath).deleteSync();
       } catch (_) {}
@@ -533,7 +533,7 @@ class SurveillanceController {
           savedFacePaths = await _imageService.saveFaceImages(
             detectedFaces,
             alertType: 'unknown_face',
-            sessionInfo: 'u${unknownCount}_k${knownCount}',
+            sessionInfo: 'u${unknownCount}_k$knownCount',
           );
           debugPrint('✅ Saved ${savedFacePaths.length} face crops');
         } catch (e) {

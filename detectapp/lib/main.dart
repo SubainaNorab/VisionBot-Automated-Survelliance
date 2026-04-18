@@ -426,7 +426,7 @@ class _CompactStatusPanel extends StatelessWidget {
           // Face verification status
           Row(
             children: [
-              Icon(Icons.face, color: Colors.blueAccent, size: 14),
+              const Icon(Icons.face, color: Colors.blueAccent, size: 14),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -472,7 +472,7 @@ class _CompactStatusPanel extends StatelessWidget {
                     Switch(
                       value: autoVerify,
                       onChanged: onAutoVerifyChanged,
-                      activeColor: Colors.green,
+                      activeThumbColor: Colors.green,
                       materialTapTargetSize: MaterialTapTargetSize.padded,
                     ),
                     const SizedBox(width: 8),
@@ -547,7 +547,7 @@ class _YoloDetectionDisplay extends StatelessWidget {
           // ✅ People count (Face verification detection)
           Row(
             children: [
-              Icon(Icons.people, color: Colors.orangeAccent, size: 18),
+              const Icon(Icons.people, color: Colors.orangeAccent, size: 18),
               const SizedBox(width: 8),
               Text(
                 'People: $peopleCount',
