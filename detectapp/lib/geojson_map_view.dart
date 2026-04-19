@@ -15,8 +15,6 @@ class GeoJSONMapView extends StatefulWidget {
 
 class _GeoJSONMapViewState extends State<GeoJSONMapView>
     with AutomaticKeepAliveClientMixin {
-  GoogleMapController? _mapController;
-
   // ── GeoJSON data (optimized) ──────────────────────────────────────────────
   List<LatLng> pathCoordinates = [];
   List<List<LatLng>> boundaryPolygons = [];
@@ -71,7 +69,6 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
     _positionSub?.cancel();
     _bleStatusSub?.cancel();
     _bleConnSub?.cancel();
-    _mapController?.dispose();
     _ble.dispose();
     super.dispose();
   }
@@ -232,8 +229,10 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
     await _ble.sendCommand('F');
 
     // Advance to next waypoint
-    _currentWaypointIndex =
-        (_currentWaypointIndex + 1) % pathCoordinates.length;
+    final len = pathCoordinates.length;
+    if (len > 0) {
+      _currentWaypointIndex = (_currentWaypointIndex + 1) % len;
+    }
 
     if (mounted) {
       setState(
@@ -337,15 +336,23 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
 
       if (!mounted) return;
 
-      // Only set up UI if data loaded successfully
-      if (pathCoordinates.isNotEmpty) {
+      _synthesizePathFromBoundaryIfNeeded();
+
+      if (pathCoordinates.isNotEmpty || boundaryPolygons.isNotEmpty) {
         _setupMapUI();
         if (mounted) {
           setState(() {
             _isLoading = false;
-            _statusMessage = '✅ Path loaded — connect BLE to start';
+            _statusMessage = pathCoordinates.isNotEmpty
+                ? '✅ Path loaded — connect BLE to start'
+                : '✅ Boundary loaded — connect BLE to start';
           });
         }
+      } else if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _statusMessage = 'No path or boundary in GeoJSON assets';
+        });
       }
     } catch (e) {
       debugPrint('[ERROR] Failed to load GeoJSON: $e');
@@ -382,10 +389,24 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
     if (features == null) return;
     for (final f in features) {
       final g = f['geometry'] as Map<String, dynamic>?;
-      if (g?['type'] == 'LineString') {
-        for (final c in (g!['coordinates'] as List)) {
-          pathCoordinates
-              .add(LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()));
+      if (g == null) continue;
+      if (g['type'] == 'LineString') {
+        for (final c in (g['coordinates'] as List)) {
+          pathCoordinates.add(
+            LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()),
+          );
+        }
+      } else if (g['type'] == 'Polygon') {
+        // Many GeoJSON exports use a Polygon for a closed route ring.
+        final rings = g['coordinates'] as List<dynamic>?;
+        if (rings == null || rings.isEmpty) continue;
+        final outer = rings.first as List<dynamic>;
+        for (final c in outer) {
+          final list = c as List<dynamic>;
+          if (list.length < 2) continue;
+          pathCoordinates.add(
+            LatLng((list[1] as num).toDouble(), (list[0] as num).toDouble()),
+          );
         }
       }
     }
@@ -396,17 +417,29 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
     if (features == null) return;
     for (final f in features) {
       final g = f['geometry'] as Map<String, dynamic>?;
-      if (g?['type'] == 'Polygon') {
-        for (final ring in (g!['coordinates'] as List)) {
-          final poly = <LatLng>[];
-          for (final c in ring) {
-            poly.add(
-                LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()));
-          }
-          if (poly.isNotEmpty) boundaryPolygons.add(poly);
-        }
+      if (g?['type'] != 'Polygon') continue;
+      final coords = g!['coordinates'] as List<dynamic>?;
+      if (coords == null || coords.isEmpty) continue;
+      // Only the exterior ring — inner rings are holes; adding them broke "inside" logic.
+      final outer = coords.first as List<dynamic>;
+      final poly = <LatLng>[];
+      for (final c in outer) {
+        final list = c as List<dynamic>;
+        if (list.length < 2) continue;
+        poly.add(
+          LatLng((list[1] as num).toDouble(), (list[0] as num).toDouble()),
+        );
       }
+      if (poly.length >= 3) boundaryPolygons.add(poly);
     }
+  }
+
+  /// If path.geojson had no LineString/Polygon route but a boundary exists, follow the boundary ring.
+  void _synthesizePathFromBoundaryIfNeeded() {
+    if (pathCoordinates.isNotEmpty || boundaryPolygons.isEmpty) return;
+    final outer = boundaryPolygons.first;
+    if (outer.length < 3) return;
+    pathCoordinates.addAll(outer);
   }
 
   void _setupMapUI() {
@@ -492,10 +525,13 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
   }
 
   CameraPosition _getInitialCameraPosition() {
-    if (pathCoordinates.isEmpty) {
-      return const CameraPosition(target: LatLng(0, 0), zoom: 15);
+    if (pathCoordinates.isNotEmpty) {
+      return CameraPosition(target: pathCoordinates.first, zoom: 17);
     }
-    return CameraPosition(target: pathCoordinates.first, zoom: 17);
+    if (boundaryPolygons.isNotEmpty && boundaryPolygons.first.isNotEmpty) {
+      return CameraPosition(target: boundaryPolygons.first.first, zoom: 17);
+    }
+    return const CameraPosition(target: LatLng(0, 0), zoom: 15);
   }
 
   @override
@@ -503,34 +539,44 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
     super.build(context); // for AutomaticKeepAliveClientMixin
 
     return Stack(
+      fit: StackFit.expand,
       children: [
-        // Google Map - only shown when loaded
-        if (!_isLoading && pathCoordinates.isNotEmpty)
-          GoogleMap(
-            onMapCreated: (c) => _mapController = c,
-            initialCameraPosition: _getInitialCameraPosition(),
-            polylines: polylines,
-            polygons: polygons,
-            markers: {...markers, ...debugPathMarkers},
-            myLocationEnabled: true,
-            myLocationButtonEnabled: true,
-            compassEnabled: true,
-            // Performance optimizations
-            zoomGesturesEnabled: true,
-            scrollGesturesEnabled: true,
-            rotateGesturesEnabled: true,
-            tiltGesturesEnabled: true,
+        // GoogleMap must get tight bounded layout — bare Stack child caused native crashes.
+        if (!_isLoading &&
+            (pathCoordinates.isNotEmpty || boundaryPolygons.isNotEmpty))
+          Positioned.fill(
+            child: GoogleMap(
+              initialCameraPosition: _getInitialCameraPosition(),
+              polylines: polylines,
+              polygons: polygons,
+              markers: {...markers, ...debugPathMarkers},
+              myLocationEnabled: true,
+              myLocationButtonEnabled: true,
+              compassEnabled: true,
+              zoomGesturesEnabled: true,
+              scrollGesturesEnabled: true,
+              rotateGesturesEnabled: true,
+              tiltGesturesEnabled: true,
+            ),
           )
         else
-          // Loading state
-          Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const CircularProgressIndicator(),
-                const SizedBox(height: 16),
-                Text(_statusMessage),
-              ],
+          Positioned.fill(
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Text(
+                      _statusMessage,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
 

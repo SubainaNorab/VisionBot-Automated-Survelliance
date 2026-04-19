@@ -663,6 +663,35 @@ class SurveillanceController {
     _multi.setGroupThreshold(threshold);
   }
 
+  /// Stops ML + camera stream before the Location tab mounts Google Maps.
+  /// Camera preview + Maps platform view together commonly crash Android GPUs.
+  Future<void> pauseForMapTab() async {
+    _stopContinuousVerification();
+    try {
+      if (_camera.controller?.value.isStreamingImages ?? false) {
+        await _camera.stopStream();
+      }
+    } catch (e) {
+      debugPrint('⚠️ pauseForMapTab stopStream: $e');
+    }
+    await Future.delayed(const Duration(milliseconds: 280));
+  }
+
+  /// Restores surveillance after leaving the Location tab.
+  Future<void> resumeFromMapTab() async {
+    try {
+      if (_camera.isInitialized &&
+          !(_camera.controller?.value.isStreamingImages ?? false)) {
+        await _camera.startStream(_onFrame);
+      }
+    } catch (e) {
+      debugPrint('⚠️ resumeFromMapTab startStream: $e');
+    }
+    if (_autoVerify && mounted) {
+      _startContinuousVerification();
+    }
+  }
+
   void _updateState(SurveillanceState newState) {
     if (mounted) {
       _state = newState;

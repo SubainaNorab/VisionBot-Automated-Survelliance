@@ -1,5 +1,6 @@
 // main.dart - FIXED: Display people count and group detection correctly
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -35,6 +36,10 @@ Future<void> _requestAllPermissions() async {
   await one(Permission.locationWhenInUse);
   await one(Permission.storage);
   await one(Permission.photos);
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    await one(Permission.bluetoothScan);
+    await one(Permission.bluetoothConnect);
+  }
 }
 
 class VisionBot extends StatelessWidget {
@@ -64,6 +69,9 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
   late final SurveillanceController _controller;
   late final TabController _tabController;
 
+  /// Map widget mounts only after the camera image stream is stopped (Android stability).
+  bool _mapContentReady = false;
+
   @override
   void initState() {
     super.initState();
@@ -71,12 +79,38 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
     WidgetsBinding.instance.addObserver(this);
 
     _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(_onMainTabChanged);
 
     _controller = SurveillanceController(groupThreshold: 1);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _controller.initialize();
     });
+  }
+
+  void _onMainTabChanged() {
+    if (_tabController.indexIsChanging) return;
+    if (_tabController.index == 1) {
+      _prepareMapTab();
+    } else {
+      _prepareSurveillanceTab();
+    }
+  }
+
+  Future<void> _prepareMapTab() async {
+    if (!mounted) return;
+    setState(() => _mapContentReady = false);
+    await _controller.pauseForMapTab();
+    if (!mounted || _tabController.index != 1) return;
+    setState(() => _mapContentReady = true);
+  }
+
+  Future<void> _prepareSurveillanceTab() async {
+    if (!mounted) return;
+    setState(() => _mapContentReady = false);
+    await _controller.resumeFromMapTab();
+    if (!mounted || _tabController.index != 0) return;
+    setState(() {});
   }
 
   @override
@@ -87,6 +121,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
 
   @override
   void dispose() {
+    _tabController.removeListener(_onMainTabChanged);
     WidgetsBinding.instance.removeObserver(this);
     _tabController.dispose();
     _controller.dispose();
@@ -110,89 +145,101 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
             onVerifyFacePressed: _controller.verifyFace,
             isProcessingFace: state.processingFace,
           ),
-          body: TabBarView(
-            controller: _tabController,
-            physics:
-                const NeverScrollableScrollPhysics(), // Prevent swipe, use tab bar
-            children: [
-              // Surveillance Tab
-              Column(
-                children: [
-                  // Camera Preview
-                  Expanded(
-                    child: Stack(
-                      children: [
-                        Positioned.fill(
-                          child: _controller.camera.buildPreview(),
-                        ),
-                        if (state.isBooting)
-                          const Positioned.fill(
-                            child: Center(child: CircularProgressIndicator()),
+          // TabBarView keeps every child alive → camera + Google Map often crash Android.
+          // Show exactly one heavy surface at a time; pause camera before mounting the map.
+          body: AnimatedBuilder(
+            animation: _tabController,
+            builder: (context, _) {
+              final onLocation = _tabController.index == 1;
+              if (!onLocation) {
+                return Column(
+                  children: [
+                    Expanded(
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: _controller.camera.buildPreview(),
                           ),
-                        // Live indicator
-                        Positioned(top: 8, right: 8, child: _LiveIndicator()),
-                        // Auto-verify status
-                        Positioned(
-                          top: 8,
-                          left: 8,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
+                          if (state.isBooting)
+                            const Positioned.fill(
+                              child: Center(child: CircularProgressIndicator()),
                             ),
-                            decoration: BoxDecoration(
-                              color: Colors.black87,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: _controller.autoVerify
-                                    ? Colors.green
-                                    : Colors.grey,
-                                width: 2,
+                          Positioned(
+                              top: 8, right: 8, child: _LiveIndicator()),
+                          Positioned(
+                            top: 8,
+                            left: 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
                               ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  _controller.autoVerify
-                                      ? Icons.check_circle
-                                      : Icons.cancel,
+                              decoration: BoxDecoration(
+                                color: Colors.black87,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
                                   color: _controller.autoVerify
                                       ? Colors.green
                                       : Colors.grey,
-                                  size: 16,
+                                  width: 2,
                                 ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Auto: ${_controller.autoVerify ? "ON" : "OFF"}',
-                                  style: TextStyle(
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    _controller.autoVerify
+                                        ? Icons.check_circle
+                                        : Icons.cancel,
                                     color: _controller.autoVerify
                                         ? Colors.green
                                         : Colors.grey,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12,
+                                    size: 16,
                                   ),
-                                ),
-                              ],
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    'Auto: ${_controller.autoVerify ? "ON" : "OFF"}',
+                                    style: TextStyle(
+                                      color: _controller.autoVerify
+                                          ? Colors.green
+                                          : Colors.grey,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
+                    _CompactStatusPanel(
+                      state: state,
+                      autoVerify: _controller.autoVerify,
+                      onAutoVerifyChanged: _controller.setAutoVerify,
+                      onVerifyPressed: _controller.verifyFace,
+                    ),
+                  ],
+                );
+              }
+              if (!_mapContentReady) {
+                return const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 16),
+                      Text(
+                        'Preparing map…',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ],
                   ),
-
-                  // Status Panel
-                  _CompactStatusPanel(
-                    state: state,
-                    autoVerify: _controller.autoVerify,
-                    onAutoVerifyChanged: _controller.setAutoVerify,
-                    onVerifyPressed: _controller.verifyFace,
-                  ),
-                ],
-              ),
-              // Location Tab - Built only when needed with AutomaticKeepAliveClientMixin
-              const GeoJSONMapView(),
-            ],
+                );
+              }
+              return const GeoJSONMapView();
+            },
           ),
         );
       },
