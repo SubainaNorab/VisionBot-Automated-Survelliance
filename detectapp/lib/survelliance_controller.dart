@@ -80,7 +80,7 @@ class SurveillanceController {
   bool _continuousRunning = false;
 
   final Map<String, DateTime> _recentlyVerified = {};
-  const Duration _verificationCacheDuration = Duration(seconds: 30);
+  static const Duration _verificationCacheDuration = Duration(seconds: 30);
 
   int _lastVerifiedFaceCount = 0;
   int _lastKnownCount = 0;
@@ -93,6 +93,11 @@ class SurveillanceController {
   Timer? _imageCleanupTimer;
 
   String? _lastCapturedImagePath;
+
+  Position? _locationCache;
+  DateTime? _locationCacheTime;
+  static const Duration _locationCacheTtl = Duration(seconds: 45);
+  Future<Position?>? _locationInFlight;
 
   Stream<SurveillanceState> get stateStream => _stateController.stream;
   SurveillanceState get currentState => _state;
@@ -172,37 +177,58 @@ class SurveillanceController {
   }
 
   Future<Position?> _getCurrentLocation() async {
+    final cached = _locationCache;
+    final cacheAt = _locationCacheTime;
+    if (cached != null &&
+        cacheAt != null &&
+        DateTime.now().difference(cacheAt) < _locationCacheTtl) {
+      return cached;
+    }
+
+    if (_locationInFlight != null) {
+      return _locationInFlight!;
+    }
+
+    _locationInFlight = _fetchGpsPosition();
     try {
-      // Check if location services are enabled
+      final pos = await _locationInFlight!;
+      if (pos != null) {
+        _locationCache = pos;
+        _locationCacheTime = DateTime.now();
+      }
+      return pos;
+    } finally {
+      _locationInFlight = null;
+    }
+  }
+
+  Future<Position?> _fetchGpsPosition() async {
+    try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         debugPrint('⚠️ Location services disabled');
         return null;
       }
 
-      // Check/request permission
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          debugPrint('⚠️ Location permission denied');
-          return null;
-        }
       }
-      if (permission == LocationPermission.deniedForever) {
-        debugPrint('⚠️ Location permission permanently denied');
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        debugPrint('⚠️ Location permission denied');
         return null;
       }
 
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 5),
+        desiredAccuracy: LocationAccuracy.medium,
+        timeLimit: const Duration(seconds: 12),
       );
 
       debugPrint('📍 Location: ${position.latitude}, ${position.longitude}');
       return position;
-    } catch (e) {
-      debugPrint('❌ Location error: $e');
+    } catch (e, st) {
+      debugPrint('❌ Location error: $e\n$st');
       return null;
     }
   }

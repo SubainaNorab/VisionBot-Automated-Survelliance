@@ -20,23 +20,21 @@ void main() async {
 }
 
 Future<void> _requestAllPermissions() async {
-  try {
-    debugPrint('🔐 Requesting permissions...');
+  debugPrint('🔐 Requesting permissions...');
 
-    Map<Permission, PermissionStatus> statuses = await [
-      Permission.camera,
-      Permission.storage,
-      Permission.photos,
-      Permission.location,
-    ].request();
-
-    debugPrint('📋 Permission results:');
-    statuses.forEach((permission, status) {
-      debugPrint('   ${permission.toString()}: $status');
-    });
-  } catch (e) {
-    debugPrint('❌ Permission request failed: $e');
+  Future<void> one(Permission p) async {
+    try {
+      final status = await p.request();
+      debugPrint('   ${p.toString().split('.').last}: $status');
+    } catch (e) {
+      debugPrint('   ${p.toString().split('.').last}: failed ($e)');
+    }
   }
+
+  await one(Permission.camera);
+  await one(Permission.locationWhenInUse);
+  await one(Permission.storage);
+  await one(Permission.photos);
 }
 
 class VisionBot extends StatelessWidget {

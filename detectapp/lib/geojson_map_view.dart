@@ -1,7 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:isolate';
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -17,7 +15,7 @@ class GeoJSONMapView extends StatefulWidget {
 
 class _GeoJSONMapViewState extends State<GeoJSONMapView>
     with AutomaticKeepAliveClientMixin {
-  late GoogleMapController _mapController;
+  GoogleMapController? _mapController;
 
   // ── GeoJSON data (optimized) ──────────────────────────────────────────────
   List<LatLng> pathCoordinates = [];
@@ -29,7 +27,6 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
   Set<Marker> debugPathMarkers = {};
 
   bool _isLoading = true;
-  bool _mapReady = false;
   String _statusMessage = 'Loading GeoJSON files...';
 
   // ── BLE + Navigation ──────────────────────────────────────────────────────
@@ -39,7 +36,6 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
   String _carStatus = 'CLEAR'; // BLOCKED or CLEAR from Arduino
 
   // GPS tracking
-  Position? _currentPosition;
   StreamSubscription<Position>? _positionSub;
   StreamSubscription<dynamic>? _bleStatusSub;
   StreamSubscription<dynamic>? _bleConnSub;
@@ -49,6 +45,13 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
   bool _isTurning = false;
   static const double _waypointThresholdMeters = 4.0;
   static const int _turnDurationMs = 700; // tune on real surface
+
+  /// Throttle marker/UI work from GPS stream.
+  LatLng? _lastPublishedCarPos;
+  DateTime _lastMarkerUiAt = DateTime.fromMillisecondsSinceEpoch(0);
+  static const double _markerMinMoveM = 5.0;
+  static const Duration _markerUiMinInterval = Duration(milliseconds: 450);
+  int _lastDistStatusBucket = -1;
 
   @override
   bool get wantKeepAlive => true;
@@ -68,6 +71,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
     _positionSub?.cancel();
     _bleStatusSub?.cancel();
     _bleConnSub?.cancel();
+    _mapController?.dispose();
     _ble.dispose();
     super.dispose();
   }
@@ -102,10 +106,42 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
     _positionSub?.cancel();
     _positionSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 2, // Increased from 1m to reduce update frequency
+        accuracy: LocationAccuracy.medium,
+        distanceFilter: 8,
       ),
-    ).listen(_onPositionUpdate);
+    ).listen(
+      _onPositionUpdate,
+      onError: (Object e, StackTrace st) {
+        debugPrint('[NAV] GPS stream error: $e\n$st');
+        if (mounted) {
+          _updateStatus('GPS error — stop patrol and try again');
+        }
+      },
+    );
+  }
+
+  Future<bool> _ensureLocationReady() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        if (mounted) _updateStatus('Turn on device location (GPS)');
+        return false;
+      }
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        if (mounted) {
+          _updateStatus('Location permission required for patrol');
+        }
+        return false;
+      }
+      return true;
+    } catch (e, st) {
+      debugPrint('[NAV] Location prep failed: $e\n$st');
+      return false;
+    }
   }
 
   void _stopGpsTracking() {
@@ -114,9 +150,9 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
   }
 
   void _onPositionUpdate(Position pos) {
+    if (!mounted) return;
     if (!_patrolActive || pathCoordinates.isEmpty) return;
 
-    _currentPosition = pos;
     final carLatLng = LatLng(pos.latitude, pos.longitude);
 
     // Update car marker only once per position (batched update)
@@ -140,13 +176,15 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
         nextWaypoint.longitude,
       );
 
-      // Only update status message periodically to reduce setState calls
-      if (dist.toInt() % 5 == 0) {
-        // Update every ~5 meters
-        setState(() {
-          _statusMessage =
-              '🚗 To waypoint $_currentWaypointIndex: ${dist.toStringAsFixed(1)}m';
-        });
+      final bucket = dist.floor() ~/ 5;
+      if (bucket != _lastDistStatusBucket) {
+        _lastDistStatusBucket = bucket;
+        if (mounted) {
+          setState(() {
+            _statusMessage =
+                '🚗 To waypoint $_currentWaypointIndex: ${dist.toStringAsFixed(1)}m';
+          });
+        }
       }
 
       if (dist < _waypointThresholdMeters && !_isTurning) {
@@ -165,17 +203,31 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
     // Determine turn direction from current leg
     final turnDir = _getTurnDirection(_currentWaypointIndex);
 
-    setState(() =>
-        _statusMessage = 'Turning ${turnDir == "L" ? "Left" : "Right"}...');
+    if (mounted) {
+      setState(() =>
+          _statusMessage = 'Turning ${turnDir == "L" ? "Left" : "Right"}...');
+    }
 
     await _ble.sendCommand('S');
     await Future.delayed(const Duration(milliseconds: 200));
+    if (!mounted) {
+      _isTurning = false;
+      return;
+    }
 
     await _ble.sendCommand(turnDir);
     await Future.delayed(Duration(milliseconds: _turnDurationMs));
+    if (!mounted) {
+      _isTurning = false;
+      return;
+    }
 
     await _ble.sendCommand('S');
     await Future.delayed(const Duration(milliseconds: 200));
+    if (!mounted) {
+      _isTurning = false;
+      return;
+    }
 
     await _ble.sendCommand('F');
 
@@ -183,8 +235,10 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
     _currentWaypointIndex =
         (_currentWaypointIndex + 1) % pathCoordinates.length;
 
-    setState(
-        () => _statusMessage = '🚗 Moving to waypoint $_currentWaypointIndex');
+    if (mounted) {
+      setState(
+          () => _statusMessage = '🚗 Moving to waypoint $_currentWaypointIndex');
+    }
 
     _isTurning = false;
   }
@@ -225,9 +279,17 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
       return;
     }
 
+    final locOk = await _ensureLocationReady();
+    if (!locOk) {
+      _updateStatus('Allow location + enable GPS to start patrol');
+      return;
+    }
+
     _currentWaypointIndex = 0;
     _patrolActive = true;
     _isTurning = false;
+    _lastDistStatusBucket = -1;
+    _lastPublishedCarPos = null;
 
     _startGpsTracking();
     await _ble.sendCommand('F');
@@ -372,7 +434,22 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
   }
 
   void _updateCarMarker(LatLng pos) {
-    // Batch update to reduce setState calls
+    if (!mounted) return;
+    final last = _lastPublishedCarPos;
+    if (last != null) {
+      final moved = Geolocator.distanceBetween(
+        last.latitude,
+        last.longitude,
+        pos.latitude,
+        pos.longitude,
+      );
+      if (moved < _markerMinMoveM) return;
+    }
+    final now = DateTime.now();
+    if (now.difference(_lastMarkerUiAt) < _markerUiMinInterval) return;
+    _lastMarkerUiAt = now;
+    _lastPublishedCarPos = pos;
+
     final newMarker = Marker(
       markerId: const MarkerId('car'),
       position: pos,
@@ -384,12 +461,9 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
       ),
     );
 
-    // Only update if marker actually changed
-    if (markers.isEmpty || markers.first.position != pos) {
-      setState(() {
-        markers = {newMarker};
-      });
-    }
+    setState(() {
+      markers = {newMarker};
+    });
   }
 
   bool _isPointInBoundary(LatLng point) {
@@ -433,10 +507,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
         // Google Map - only shown when loaded
         if (!_isLoading && pathCoordinates.isNotEmpty)
           GoogleMap(
-            onMapCreated: (c) {
-              _mapController = c;
-              _mapReady = true;
-            },
+            onMapCreated: (c) => _mapController = c,
             initialCameraPosition: _getInitialCameraPosition(),
             polylines: polylines,
             polygons: polygons,
@@ -449,7 +520,6 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView>
             scrollGesturesEnabled: true,
             rotateGesturesEnabled: true,
             tiltGesturesEnabled: true,
-            cameraTargetBounds: CameraUpdateBounds.unbounded,
           )
         else
           // Loading state
