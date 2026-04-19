@@ -81,6 +81,7 @@ class SurveillanceController {
 
   final Map<String, DateTime> _recentlyVerified = {};
 <<<<<<< HEAD
+<<<<<<< HEAD
   final Duration _verificationCacheDuration = Duration(seconds: 30);
   Timer? _imageCleanupTimer;
 
@@ -89,6 +90,9 @@ class SurveillanceController {
   set _lastVerifiedFaceCount(int value) => _lastVerifiedPeopleCount = value;
 =======
   const Duration _verificationCacheDuration = Duration(seconds: 30);
+=======
+  static const Duration _verificationCacheDuration = Duration(seconds: 30);
+>>>>>>> e968b74e24df4175437e368dab9ab00b2a39be1d
 
   int _lastVerifiedFaceCount = 0;
 >>>>>>> dc8d5433e59a111f120606ecea0b8842f69dd169
@@ -103,6 +107,11 @@ class SurveillanceController {
 
   String? _lastCapturedImagePath;
   String? get _currentFramePath => _lastCapturedImagePath;
+
+  Position? _locationCache;
+  DateTime? _locationCacheTime;
+  static const Duration _locationCacheTtl = Duration(seconds: 45);
+  Future<Position?>? _locationInFlight;
 
   Stream<SurveillanceState> get stateStream => _stateController.stream;
   SurveillanceState get currentState => _state;
@@ -182,37 +191,58 @@ class SurveillanceController {
   }
 
   Future<Position?> _getCurrentLocation() async {
+    final cached = _locationCache;
+    final cacheAt = _locationCacheTime;
+    if (cached != null &&
+        cacheAt != null &&
+        DateTime.now().difference(cacheAt) < _locationCacheTtl) {
+      return cached;
+    }
+
+    if (_locationInFlight != null) {
+      return _locationInFlight!;
+    }
+
+    _locationInFlight = _fetchGpsPosition();
     try {
-      // Check if location services are enabled
+      final pos = await _locationInFlight!;
+      if (pos != null) {
+        _locationCache = pos;
+        _locationCacheTime = DateTime.now();
+      }
+      return pos;
+    } finally {
+      _locationInFlight = null;
+    }
+  }
+
+  Future<Position?> _fetchGpsPosition() async {
+    try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         debugPrint('⚠️ Location services disabled');
         return null;
       }
 
-      // Check/request permission
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          debugPrint('⚠️ Location permission denied');
-          return null;
-        }
       }
-      if (permission == LocationPermission.deniedForever) {
-        debugPrint('⚠️ Location permission permanently denied');
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        debugPrint('⚠️ Location permission denied');
         return null;
       }
 
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 5),
+        desiredAccuracy: LocationAccuracy.medium,
+        timeLimit: const Duration(seconds: 12),
       );
 
       debugPrint('📍 Location: ${position.latitude}, ${position.longitude}');
       return position;
-    } catch (e) {
-      debugPrint('❌ Location error: $e');
+    } catch (e, st) {
+      debugPrint('❌ Location error: $e\n$st');
       return null;
     }
   }
@@ -795,6 +825,35 @@ class SurveillanceController {
 
   void setGroupThreshold(int threshold) {
     _multi.setGroupThreshold(threshold);
+  }
+
+  /// Stops ML + camera stream before the Location tab mounts Google Maps.
+  /// Camera preview + Maps platform view together commonly crash Android GPUs.
+  Future<void> pauseForMapTab() async {
+    _stopContinuousVerification();
+    try {
+      if (_camera.controller?.value.isStreamingImages ?? false) {
+        await _camera.stopStream();
+      }
+    } catch (e) {
+      debugPrint('⚠️ pauseForMapTab stopStream: $e');
+    }
+    await Future.delayed(const Duration(milliseconds: 280));
+  }
+
+  /// Restores surveillance after leaving the Location tab.
+  Future<void> resumeFromMapTab() async {
+    try {
+      if (_camera.isInitialized &&
+          !(_camera.controller?.value.isStreamingImages ?? false)) {
+        await _camera.startStream(_onFrame);
+      }
+    } catch (e) {
+      debugPrint('⚠️ resumeFromMapTab startStream: $e');
+    }
+    if (_autoVerify && mounted) {
+      _startContinuousVerification();
+    }
   }
 
   void _updateState(SurveillanceState newState) {

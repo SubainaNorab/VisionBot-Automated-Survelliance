@@ -22,6 +22,32 @@ if (flutterVersionName == null) {
     flutterVersionName = '1.0'
 }
 
+// Google Maps SDK — value must be NON-EMPTY or the app crashes when GoogleMap loads
+// (IllegalStateException: API key not found). Prefer a real key from:
+//   android/local.properties → maps.api.key=...
+//   env MAPS_API_KEY or GOOGLE_MAPS_ANDROID_KEY (CI)
+def mapsApiKey = (localProperties.getProperty('maps.api.key') ?: '').trim()
+if (mapsApiKey.isEmpty()) {
+    mapsApiKey = (System.getenv('MAPS_API_KEY') ?: '').trim()
+}
+if (mapsApiKey.isEmpty()) {
+    mapsApiKey = (System.getenv('GOOGLE_MAPS_ANDROID_KEY') ?: '').trim()
+}
+def keysFile = rootProject.file('keys.properties')
+if (mapsApiKey.isEmpty() && keysFile.exists()) {
+    def p = new Properties()
+    keysFile.withReader('UTF-8') { p.load(it) }
+    mapsApiKey = (p.getProperty('maps.api.key') ?: '').trim()
+}
+if (mapsApiKey.isEmpty()) {
+    mapsApiKey = 'DUMMY_KEY_SET_maps.api.key_IN_local_properties'
+    logger.lifecycle('')
+    logger.lifecycle('WARNING: Google Maps API key missing.')
+    logger.lifecycle('Add to android/local.properties: maps.api.key=<your Android Maps SDK key>')
+    logger.lifecycle('Using a placeholder so the app does not crash; tiles will not load until set.')
+    logger.lifecycle('')
+}
+
 android {
     namespace "com.example.detectapp"
     compileSdk = 36  // ✅ UPDATED to 36
@@ -46,6 +72,7 @@ android {
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
         multiDexEnabled true
+        manifestPlaceholders += [MAPS_API_KEY: mapsApiKey]
     }
 
     buildTypes {
@@ -70,3 +97,7 @@ dependencies {
 
 // Apply Google Services plugin at the end
 apply plugin: 'com.google.gms.google-services'
+
+// Maps key: android/local.properties → maps.api.key=...
+//   or env MAPS_API_KEY / GOOGLE_MAPS_ANDROID_KEY
+//   or android/keys.properties (see keys.properties.example; file is gitignored)
