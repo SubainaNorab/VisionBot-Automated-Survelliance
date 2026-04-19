@@ -114,6 +114,8 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
           ),
           body: TabBarView(
             controller: _tabController,
+            physics:
+                const NeverScrollableScrollPhysics(), // Prevent swipe, use tab bar
             children: [
               // Surveillance Tab
               Column(
@@ -190,7 +192,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                   ),
                 ],
               ),
-              // Location Tab
+              // Location Tab - Built only when needed with AutomaticKeepAliveClientMixin
               const GeoJSONMapView(),
             ],
           ),

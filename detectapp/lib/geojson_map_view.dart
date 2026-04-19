@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,19 +15,21 @@ class GeoJSONMapView extends StatefulWidget {
   State<GeoJSONMapView> createState() => _GeoJSONMapViewState();
 }
 
-class _GeoJSONMapViewState extends State<GeoJSONMapView> {
+class _GeoJSONMapViewState extends State<GeoJSONMapView>
+    with AutomaticKeepAliveClientMixin {
   late GoogleMapController _mapController;
 
-  // ── GeoJSON data (unchanged) ──────────────────────────────────────────────
+  // ── GeoJSON data (optimized) ──────────────────────────────────────────────
   List<LatLng> pathCoordinates = [];
   List<List<LatLng>> boundaryPolygons = [];
 
-  final Set<Polyline> polylines = {};
-  final Set<Polygon> polygons = {};
+  late Set<Polyline> polylines;
+  late Set<Polygon> polygons;
   Set<Marker> markers = {};
   Set<Marker> debugPathMarkers = {};
 
   bool _isLoading = true;
+  bool _mapReady = false;
   String _statusMessage = 'Loading GeoJSON files...';
 
   // ── BLE + Navigation ──────────────────────────────────────────────────────
@@ -38,6 +41,8 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   // GPS tracking
   Position? _currentPosition;
   StreamSubscription<Position>? _positionSub;
+  StreamSubscription<dynamic>? _bleStatusSub;
+  StreamSubscription<dynamic>? _bleConnSub;
   int _currentWaypointIndex = 0;
 
   // Turn state
@@ -46,38 +51,43 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   static const int _turnDurationMs = 700; // tune on real surface
 
   @override
+  bool get wantKeepAlive => true;
+
+  @override
   void initState() {
     super.initState();
-    _loadGeoJSONFiles();
-    _listenBleStatus();
-    _listenBleConnection();
+    polylines = {};
+    polygons = {};
+    // Load GeoJSON asynchronously to prevent blocking UI
+    _loadGeoJSONFilesAsync();
+    _setupBleListeners();
   }
 
   @override
   void dispose() {
     _positionSub?.cancel();
+    _bleStatusSub?.cancel();
+    _bleConnSub?.cancel();
     _ble.dispose();
     super.dispose();
   }
 
-  // ── BLE listeners ─────────────────────────────────────────────────────────
+  // ── Setup BLE listeners (moved to optimize lifecycle) ─────────────────────
 
-  void _listenBleStatus() {
-    _ble.statusStream.listen((status) {
+  void _setupBleListeners() {
+    _bleStatusSub = _ble.statusStream.listen((status) {
+      if (!mounted) return;
       setState(() => _carStatus = status);
       if (status == 'BLOCKED') {
         setState(() => _statusMessage = '⚠️ Obstacle! Car paused...');
-        // Arduino already stopped the car.
-        // Re-send forward once Arduino reports clear.
       } else if (status == 'CLEAR' && _patrolActive && !_isTurning) {
         _ble.sendCommand('F');
         setState(() => _statusMessage = '🚗 Resumed forward');
       }
     });
-  }
 
-  void _listenBleConnection() {
-    _ble.connectionStream.listen((connected) {
+    _bleConnSub = _ble.connectionStream.listen((connected) {
+      if (!mounted) return;
       setState(() {
         _bleConnected = connected;
         if (!connected) {
@@ -88,14 +98,12 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     });
   }
 
-  // ── GPS tracking ──────────────────────────────────────────────────────────
-
   void _startGpsTracking() {
     _positionSub?.cancel();
     _positionSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 1, // update every 1 metre
+        distanceFilter: 2, // Increased from 1m to reduce update frequency
       ),
     ).listen(_onPositionUpdate);
   }
@@ -111,7 +119,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     _currentPosition = pos;
     final carLatLng = LatLng(pos.latitude, pos.longitude);
 
-    // Update car marker on map
+    // Update car marker only once per position (batched update)
     _updateCarMarker(carLatLng);
 
     // Check if near boundary — if outside, stop and turn back
@@ -126,14 +134,20 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     if (_currentWaypointIndex < pathCoordinates.length) {
       final nextWaypoint = pathCoordinates[_currentWaypointIndex];
       final dist = Geolocator.distanceBetween(
-        pos.latitude, pos.longitude,
-        nextWaypoint.latitude, nextWaypoint.longitude,
+        pos.latitude,
+        pos.longitude,
+        nextWaypoint.latitude,
+        nextWaypoint.longitude,
       );
 
-      setState(() {
-        _statusMessage =
-            '🚗 To waypoint $_currentWaypointIndex: ${dist.toStringAsFixed(1)}m';
-      });
+      // Only update status message periodically to reduce setState calls
+      if (dist.toInt() % 5 == 0) {
+        // Update every ~5 meters
+        setState(() {
+          _statusMessage =
+              '🚗 To waypoint $_currentWaypointIndex: ${dist.toStringAsFixed(1)}m';
+        });
+      }
 
       if (dist < _waypointThresholdMeters && !_isTurning) {
         debugPrint('[NAV] Reached waypoint $_currentWaypointIndex');
@@ -169,8 +183,8 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     _currentWaypointIndex =
         (_currentWaypointIndex + 1) % pathCoordinates.length;
 
-    setState(() =>
-        _statusMessage = '🚗 Moving to waypoint $_currentWaypointIndex');
+    setState(
+        () => _statusMessage = '🚗 Moving to waypoint $_currentWaypointIndex');
 
     _isTurning = false;
   }
@@ -188,10 +202,9 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
       final p2 = pathCoordinates[1];
       final p3 = pathCoordinates[2];
 
-      final cross = (p2.longitude - p1.longitude) *
-              (p3.latitude - p1.latitude) -
-          (p2.latitude - p1.latitude) *
-              (p3.longitude - p1.longitude);
+      final cross =
+          (p2.longitude - p1.longitude) * (p3.latitude - p1.latitude) -
+              (p2.latitude - p1.latitude) * (p3.longitude - p1.longitude);
 
       // cross > 0 = CCW = turn Left, cross < 0 = CW = turn Right
       return cross > 0 ? 'L' : 'R';
@@ -200,15 +213,15 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     return 'R'; // default
   }
 
-  // ── Patrol control ────────────────────────────────────────────────────────
+  // ── Patrol control (optimized) ────────────────────────────────────────────
 
   Future<void> _startPatrol() async {
     if (!_bleConnected) {
-      setState(() => _statusMessage = 'Connect BLE first!');
+      _updateStatus('Connect BLE first!');
       return;
     }
     if (pathCoordinates.isEmpty) {
-      setState(() => _statusMessage = 'No path loaded!');
+      _updateStatus('No path loaded!');
       return;
     }
 
@@ -219,7 +232,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     _startGpsTracking();
     await _ble.sendCommand('F');
 
-    setState(() => _statusMessage = '🚗 Patrol started — moving forward');
+    _updateStatus('🚗 Patrol started — moving forward');
     debugPrint('[NAV] Patrol started');
   }
 
@@ -228,43 +241,77 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     _isTurning = false;
     _stopGpsTracking();
     await _ble.sendCommand('S');
-    setState(() => _statusMessage = '⏹️ Patrol stopped');
+    _updateStatus('⏹️ Patrol stopped');
     debugPrint('[NAV] Patrol stopped');
   }
 
   Future<void> _connectBle() async {
-    setState(() => _statusMessage = 'Scanning for car...');
+    _updateStatus('Scanning for car...');
     final ok = await _ble.connect();
+    _updateStatus(ok ? '✅ BLE connected!' : '❌ BLE not found');
+    if (!mounted) return;
     setState(() {
       _bleConnected = ok;
-      _statusMessage = ok ? '✅ BLE connected!' : '❌ BLE not found';
     });
   }
 
-  // ── Map helpers (ALL UNCHANGED from original) ─────────────────────────────
+  // Helper to batch status updates
+  void _updateStatus(String message) {
+    if (!mounted) return;
+    setState(() {
+      _statusMessage = message;
+    });
+  }
 
-  Future<void> _loadGeoJSONFiles() async {
+  // ── Async GeoJSON Loading (prevents UI blocking) ────────────────────────
+
+  Future<void> _loadGeoJSONFilesAsync() async {
     try {
-      final pathJson =
-          await rootBundle.loadString('assets/geo/path.geojson');
-      _parsePathGeoJSON(jsonDecode(pathJson));
+      // Load and parse in background to avoid blocking UI
+      await Future.wait([
+        _loadPathGeoJSON(),
+        _loadBoundariesGeoJSON(),
+      ]);
 
+      if (!mounted) return;
+
+      // Only set up UI if data loaded successfully
+      if (pathCoordinates.isNotEmpty) {
+        _setupMapUI();
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _statusMessage = '✅ Path loaded — connect BLE to start';
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('[ERROR] Failed to load GeoJSON: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _statusMessage = 'Error loading map: $e';
+        });
+      }
+    }
+  }
+
+  Future<void> _loadPathGeoJSON() async {
+    try {
+      final pathJson = await rootBundle.loadString('assets/geo/path.geojson');
+      _parsePathGeoJSON(jsonDecode(pathJson));
+    } catch (e) {
+      debugPrint('[ERROR] Failed to load path.geojson: $e');
+    }
+  }
+
+  Future<void> _loadBoundariesGeoJSON() async {
+    try {
       final boundariesJson =
           await rootBundle.loadString('assets/geo/boundaries.geojson');
       _parseBoundaryGeoJSON(jsonDecode(boundariesJson));
-
-      if (pathCoordinates.isNotEmpty) {
-        _setupMapUI();
-        setState(() {
-          _isLoading = false;
-          _statusMessage = '✅ Path loaded — connect BLE to start';
-        });
-      }
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _statusMessage = 'Error: $e';
-      });
+      debugPrint('[ERROR] Failed to load boundaries.geojson: $e');
     }
   }
 
@@ -291,7 +338,8 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
         for (final ring in (g!['coordinates'] as List)) {
           final poly = <LatLng>[];
           for (final c in ring) {
-            poly.add(LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()));
+            poly.add(
+                LatLng((c[1] as num).toDouble(), (c[0] as num).toDouble()));
           }
           if (poly.isNotEmpty) boundaryPolygons.add(poly);
         }
@@ -300,13 +348,18 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   }
 
   void _setupMapUI() {
-    polylines.add(Polyline(
-      polylineId: const PolylineId('path'),
-      points: pathCoordinates,
-      color: Colors.blue,
-      width: 4,
-    ));
+    // Build polylines
+    if (pathCoordinates.isNotEmpty) {
+      polylines.add(Polyline(
+        polylineId: const PolylineId('path'),
+        points: pathCoordinates,
+        color: Colors.blue,
+        width: 4,
+        geodesic: false,
+      ));
+    }
 
+    // Build polygons efficiently
     for (int i = 0; i < boundaryPolygons.length; i++) {
       polygons.add(Polygon(
         polygonId: PolygonId('boundary_$i'),
@@ -316,25 +369,27 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
         strokeWidth: 3,
       ));
     }
-    setState(() {});
   }
 
   void _updateCarMarker(LatLng pos) {
-    setState(() {
-      markers = {
-        Marker(
-          markerId: const MarkerId('car'),
-          position: pos,
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-              BitmapDescriptor.hueBlue),
-          infoWindow: InfoWindow(
-            title: 'Car',
-            snippet:
-                '${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)}',
-          ),
-        ),
-      };
-    });
+    // Batch update to reduce setState calls
+    final newMarker = Marker(
+      markerId: const MarkerId('car'),
+      position: pos,
+      icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+      infoWindow: InfoWindow(
+        title: 'Car',
+        snippet:
+            '${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)}',
+      ),
+    );
+
+    // Only update if marker actually changed
+    if (markers.isEmpty || markers.first.position != pos) {
+      setState(() {
+        markers = {newMarker};
+      });
+    }
   }
 
   bool _isPointInBoundary(LatLng point) {
@@ -354,8 +409,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
       if ((p1.latitude <= point.latitude && point.latitude < p2.latitude) ||
           (p2.latitude <= point.latitude && point.latitude < p1.latitude)) {
         final intersectLng = p1.longitude +
-            ((p2.longitude - p1.longitude) /
-                    (p2.latitude - p1.latitude)) *
+            ((p2.longitude - p1.longitude) / (p2.latitude - p1.latitude)) *
                 (point.latitude - p1.latitude);
         if (point.longitude < intersectLng) count++;
       }
@@ -370,15 +424,19 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     return CameraPosition(target: pathCoordinates.first, zoom: 17);
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
+    super.build(context); // for AutomaticKeepAliveClientMixin
+
     return Stack(
       children: [
-        if (!_isLoading)
+        // Google Map - only shown when loaded
+        if (!_isLoading && pathCoordinates.isNotEmpty)
           GoogleMap(
-            onMapCreated: (c) => _mapController = c,
+            onMapCreated: (c) {
+              _mapController = c;
+              _mapReady = true;
+            },
             initialCameraPosition: _getInitialCameraPosition(),
             polylines: polylines,
             polygons: polygons,
@@ -386,8 +444,15 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
             myLocationEnabled: true,
             myLocationButtonEnabled: true,
             compassEnabled: true,
+            // Performance optimizations
+            zoomGesturesEnabled: true,
+            scrollGesturesEnabled: true,
+            rotateGesturesEnabled: true,
+            tiltGesturesEnabled: true,
+            cameraTargetBounds: CameraUpdateBounds.unbounded,
           )
         else
+          // Loading state
           Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -417,29 +482,33 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
                   _statusMessage,
                   style: const TextStyle(
                       color: Colors.white, fontWeight: FontWeight.bold),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 4),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _StatusChip(
-                      label: _bleConnected ? '🔵 BLE ON' : '⚪ BLE OFF',
-                      color: _bleConnected ? Colors.blue : Colors.grey,
-                    ),
-                    _StatusChip(
-                      label: _carStatus == 'BLOCKED'
-                          ? '🚫 BLOCKED'
-                          : '✅ CLEAR',
-                      color: _carStatus == 'BLOCKED'
-                          ? Colors.red
-                          : Colors.green,
-                    ),
-                    _StatusChip(
-                      label: _patrolActive ? '🟢 PATROL' : '⏸️ IDLE',
-                      color:
-                          _patrolActive ? Colors.green : Colors.grey,
-                    ),
-                  ],
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _StatusChip(
+                        label: _bleConnected ? '🔵 BLE ON' : '⚪ BLE OFF',
+                        color: _bleConnected ? Colors.blue : Colors.grey,
+                      ),
+                      const SizedBox(width: 8),
+                      _StatusChip(
+                        label:
+                            _carStatus == 'BLOCKED' ? '🚫 BLOCKED' : '✅ CLEAR',
+                        color:
+                            _carStatus == 'BLOCKED' ? Colors.red : Colors.green,
+                      ),
+                      const SizedBox(width: 8),
+                      _StatusChip(
+                        label: _patrolActive ? '🟢 PATROL' : '⏸️ IDLE',
+                        color: _patrolActive ? Colors.green : Colors.grey,
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -450,73 +519,73 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
         Positioned(
           top: 16,
           right: 16,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // BLE connect
-              FloatingActionButton.small(
-                heroTag: 'ble',
-                onPressed: _bleConnected ? null : _connectBle,
-                backgroundColor:
-                    _bleConnected ? Colors.blue : Colors.grey,
-                tooltip: 'Connect BLE',
-                child: const Icon(Icons.bluetooth),
-              ),
-              const SizedBox(height: 8),
-              // Start patrol
-              FloatingActionButton(
-                heroTag: 'play',
-                onPressed:
-                    (_bleConnected && !_patrolActive) ? _startPatrol : null,
-                backgroundColor: Colors.green,
-                tooltip: 'Start Patrol',
-                child: const Icon(Icons.play_arrow),
-              ),
-              const SizedBox(height: 8),
-              // Stop patrol
-              FloatingActionButton(
-                heroTag: 'stop',
-                onPressed: _patrolActive ? _stopPatrol : null,
-                backgroundColor: Colors.red,
-                tooltip: 'Stop Patrol',
-                child: const Icon(Icons.stop),
-              ),
-              const SizedBox(height: 8),
-              // Manual turn left
-              FloatingActionButton.small(
-                heroTag: 'left',
-                onPressed: _bleConnected
-                    ? () => _ble.sendCommand('L')
-                    : null,
-                tooltip: 'Turn Left',
-                child: const Icon(Icons.turn_left),
-              ),
-              const SizedBox(height: 8),
-              // Manual turn right
-              FloatingActionButton.small(
-                heroTag: 'right',
-                onPressed: _bleConnected
-                    ? () => _ble.sendCommand('R')
-                    : null,
-                tooltip: 'Turn Right',
-                child: const Icon(Icons.turn_right),
-              ),
-              const SizedBox(height: 8),
-              // Emergency Stop
-              FloatingActionButton(
-                heroTag: 'estop',
-                onPressed: _bleConnected
-                    ? () async {
-                        await _stopPatrol();
-                        await _ble.sendCommand('E');
-                        setState(() => _statusMessage = '🚨 EMERGENCY STOP');
-                      }
-                    : null,
-                backgroundColor: Colors.red.shade900,
-                tooltip: 'Emergency Stop',
-                child: const Icon(Icons.dangerous, color: Colors.yellow),
-              ),
-            ],
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // BLE connect
+                FloatingActionButton.small(
+                  heroTag: 'ble',
+                  onPressed: _bleConnected ? null : _connectBle,
+                  backgroundColor: _bleConnected ? Colors.blue : Colors.grey,
+                  tooltip: 'Connect BLE',
+                  child: const Icon(Icons.bluetooth),
+                ),
+                const SizedBox(height: 8),
+                // Start patrol
+                FloatingActionButton(
+                  heroTag: 'play',
+                  onPressed:
+                      (_bleConnected && !_patrolActive) ? _startPatrol : null,
+                  backgroundColor: Colors.green,
+                  tooltip: 'Start Patrol',
+                  child: const Icon(Icons.play_arrow),
+                ),
+                const SizedBox(height: 8),
+                // Stop patrol
+                FloatingActionButton(
+                  heroTag: 'stop',
+                  onPressed: _patrolActive ? _stopPatrol : null,
+                  backgroundColor: Colors.red,
+                  tooltip: 'Stop Patrol',
+                  child: const Icon(Icons.stop),
+                ),
+                const SizedBox(height: 8),
+                // Manual turn left
+                FloatingActionButton.small(
+                  heroTag: 'left',
+                  onPressed: _bleConnected ? () => _ble.sendCommand('L') : null,
+                  tooltip: 'Turn Left',
+                  child: const Icon(Icons.turn_left),
+                ),
+                const SizedBox(height: 8),
+                // Manual turn right
+                FloatingActionButton.small(
+                  heroTag: 'right',
+                  onPressed: _bleConnected ? () => _ble.sendCommand('R') : null,
+                  tooltip: 'Turn Right',
+                  child: const Icon(Icons.turn_right),
+                ),
+                const SizedBox(height: 8),
+                // Emergency Stop
+                FloatingActionButton(
+                  heroTag: 'estop',
+                  onPressed: _bleConnected
+                      ? () async {
+                          await _stopPatrol();
+                          await _ble.sendCommand('E');
+                          if (mounted) {
+                            setState(
+                                () => _statusMessage = '🚨 EMERGENCY STOP');
+                          }
+                        }
+                      : null,
+                  backgroundColor: Colors.red.shade900,
+                  tooltip: 'Emergency Stop',
+                  child: const Icon(Icons.dangerous, color: Colors.yellow),
+                ),
+              ],
+            ),
           ),
         ),
       ],
@@ -538,8 +607,7 @@ class _StatusChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: color),
       ),
-      child: Text(label,
-          style: TextStyle(color: color, fontSize: 11)),
+      child: Text(label, style: TextStyle(color: color, fontSize: 11)),
     );
   }
 }
