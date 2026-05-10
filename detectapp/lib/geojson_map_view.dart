@@ -239,7 +239,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     _isTurning = true;
 
     final dir = _turnDirectionAt(_currentWaypointIndex);
-    debugPrint('[NAV] Auto turn ${dir} at waypoint $_currentWaypointIndex');
+    debugPrint('[NAV] Auto turn $dir at waypoint $_currentWaypointIndex');
 
     _updateState(_navState.copyWith(
       statusMessage: 'Turning ${dir == "L" ? "Left ←" : "Right →"}...',
@@ -248,7 +248,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     await _ble.sendCommand('S');
     await Future.delayed(const Duration(milliseconds: 200));
     await _ble.sendCommand(dir);
-    await Future.delayed(Duration(milliseconds: _turnMs));
+    await Future.delayed(const Duration(milliseconds: _turnMs));
     await _ble.sendCommand('S');
     await Future.delayed(const Duration(milliseconds: 200));
     await _ble.sendCommand('F');
@@ -272,7 +272,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     ));
 
     await _ble.sendCommand(dir);
-    await Future.delayed(Duration(milliseconds: _turnMs));
+    await Future.delayed(const Duration(milliseconds: _turnMs));
     await _ble.sendCommand('S');
     await Future.delayed(
         const Duration(milliseconds: _resumeDelayMs));
