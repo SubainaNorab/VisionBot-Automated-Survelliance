@@ -1,0 +1,61 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.1473346,
+          31.46193335
+        ]
+      },
+      "properties": {
+        "name": "Waypoint 0",
+        "index": 0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.14814394999999,
+          31.462078599999998
+        ]
+      },
+      "properties": {
+        "name": "Waypoint 1",
+        "index": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.14905925,
+          31.4622639
+        ]
+      },
+      "properties": {
+        "name": "Waypoint 2",
+        "index": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.14972115,
+          31.46238975
+        ]
+      },
+      "properties": {
+        "name": "Waypoint 3",
+        "index": 3
+      }
+    }
+  ]
+}

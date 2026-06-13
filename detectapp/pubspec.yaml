@@ -41,3 +41,4 @@ flutter:
     - assets/smoking.tflite
     - assets/geo/path.geojson
     - assets/geo/boundaries.geojson
+    - assets/geo/waypoints.geojson
