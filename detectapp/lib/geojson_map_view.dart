@@ -16,6 +16,7 @@ import 'package:geolocator/geolocator.dart';
 import 'ble_navigation_service.dart';
 import 'navigation_state.dart';
 import 'path_tracker.dart';
+import 'firestore_command_listener.dart';
 
 class GeoJSONMapView extends StatefulWidget {
   const GeoJSONMapView({Key? key}) : super(key: key);
@@ -25,7 +26,6 @@ class GeoJSONMapView extends StatefulWidget {
 }
 
 class _GeoJSONMapViewState extends State<GeoJSONMapView> {
-
   // ── Map data ───────────────────────────────────────────────────────────────
   List<LatLng> pathCoordinates = [];
   List<List<LatLng>> boundaryPolygons = [];
@@ -39,7 +39,8 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
   // ── Navigation state ───────────────────────────────────────────────────────
   NavigationState _navState = const NavigationState();
-
+  // Add state variable
+  FirestoreCommandListener? _firestoreListener;
   // ── GPS ────────────────────────────────────────────────────────────────────
   StreamSubscription<Position>? _positionSub;
   Position? _lastPosition;
@@ -79,12 +80,15 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     super.initState();
     _loadGeoJSON();
     _setupBleListeners();
+    _firestoreListener = FirestoreCommandListener(_ble);
+    _firestoreListener!.start();
   }
 
   @override
   void dispose() {
     _positionSub?.cancel();
     _correctionTimer?.cancel();
+    _firestoreListener?.stop();
     _ble.dispose();
     super.dispose();
   }
@@ -93,6 +97,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
   void _setupBleListeners() {
     _ble.statusStream.listen((status) {
+      _firestoreListener?.updateObstacleStatus(status);
       _updateState(_navState.copyWith(carStatus: status));
       if (status == 'CLEAR' && _navState.patrolActive && !_isTurning) {
         _ble.sendCommand('F');
@@ -102,9 +107,8 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     _ble.connectionStream.listen((connected) {
       _updateState(_navState.copyWith(
         bleConnected: connected,
-        statusMessage: connected
-            ? '✅ BLE connected — press Start'
-            : '❌ BLE disconnected',
+        statusMessage:
+            connected ? '✅ BLE connected — press Start' : '❌ BLE disconnected',
         patrolActive: connected ? _navState.patrolActive : false,
       ));
       if (!connected && _navState.patrolActive) {
@@ -133,6 +137,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   void _onPosition(Position pos) {
     if (!_navState.patrolActive) return;
 
+    _firestoreListener?.updatePosition(pos.latitude, pos.longitude);
     _lastPosition = pos;
     final carPos = LatLng(pos.latitude, pos.longitude);
 
@@ -157,8 +162,10 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
     final target = pathCoordinates[_currentWaypointIndex];
     final dist = Geolocator.distanceBetween(
-      pos.latitude, pos.longitude,
-      target.latitude, target.longitude,
+      pos.latitude,
+      pos.longitude,
+      target.latitude,
+      target.longitude,
     );
 
     _updateState(_navState.copyWith(
@@ -181,12 +188,13 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     if (_isTurning) return;
 
     final now = DateTime.now();
-    if (now.difference(_lastCorrectionTime).inMilliseconds < _correctionCooldownMs) return;
+    if (now.difference(_lastCorrectionTime).inMilliseconds <
+        _correctionCooldownMs) return;
 
     _updateState(_navState.copyWith(
       statusMessage: correction.description,
       onPath: correction.status == PathStatus.onPath ||
-              correction.status == PathStatus.atWaypoint,
+          correction.status == PathStatus.atWaypoint,
       distToWaypoint: correction.distToWaypointM,
       currentWaypoint: correction.nextWaypointIndex,
     ));
@@ -235,7 +243,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
     _pathTracker = PathTracker(
       path: pathCoordinates,
-      waypointThresholdM: 6.0,    // ← was 999, now enabled for corners
+      waypointThresholdM: 6.0, // ← was 999, now enabled for corners
       onPathToleranceM: 5.0,
       correctionThresholdM: 10.0,
     );
@@ -260,7 +268,8 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   bool _isOnPath(LatLng pos) {
     if (pathCoordinates.length < 2) return true;
     for (int i = 0; i < pathCoordinates.length - 1; i++) {
-      final d = _distToSegmentM(pos, pathCoordinates[i], pathCoordinates[i + 1]);
+      final d =
+          _distToSegmentM(pos, pathCoordinates[i], pathCoordinates[i + 1]);
       if (d <= _offPathThresholdM) return true;
     }
     return false;
@@ -317,7 +326,8 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     await Future.delayed(Duration(milliseconds: _turnMs));
     await _ble.sendCommand('F');
 
-    _currentWaypointIndex = (_currentWaypointIndex + 1) % pathCoordinates.length;
+    _currentWaypointIndex =
+        (_currentWaypointIndex + 1) % pathCoordinates.length;
     _isTurning = false;
   }
 
@@ -430,14 +440,16 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
       final pathJson = await rootBundle.loadString('assets/geo/path.geojson');
       _parsePathGeoJSON(jsonDecode(pathJson));
 
-      final boundJson = await rootBundle.loadString('assets/geo/boundaries.geojson');
+      final boundJson =
+          await rootBundle.loadString('assets/geo/boundaries.geojson');
       _parseBoundaryGeoJSON(jsonDecode(boundJson));
 
       _buildMapOverlays();
 
       setState(() {
         _isLoading = false;
-        _navState = _navState.copyWith(statusMessage: 'Path loaded — connect BLE');
+        _navState =
+            _navState.copyWith(statusMessage: 'Path loaded — connect BLE');
       });
     } catch (e) {
       setState(() {
@@ -518,7 +530,8 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
       icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
       infoWindow: InfoWindow(
         title: '🚗 Car',
-        snippet: '${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)}',
+        snippet:
+            '${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)}',
       ),
     ));
     if (mounted) setState(() {});
@@ -751,7 +764,8 @@ class _ControlPanel extends StatelessWidget {
           icon: Icons.play_arrow,
           color: Colors.green,
           tooltip: 'Start',
-          onPressed: (state.bleConnected && !state.patrolActive) ? onStart : null,
+          onPressed:
+              (state.bleConnected && !state.patrolActive) ? onStart : null,
         ),
         const SizedBox(height: 8),
 
@@ -801,7 +815,8 @@ class _ControlPanel extends StatelessWidget {
           icon: Icons.turn_right,
           color: Colors.teal,
           tooltip: 'Turn Right',
-          onPressed: (state.bleConnected && state.patrolActive) ? onRight : null,
+          onPressed:
+              (state.bleConnected && state.patrolActive) ? onRight : null,
           small: true,
         ),
       ],
@@ -835,7 +850,8 @@ class _RoundButton extends StatelessWidget {
         backgroundColor: onPressed == null ? Colors.grey.shade800 : color,
         tooltip: tooltip,
         child: Icon(icon,
-            color: iconColor ?? (onPressed == null ? Colors.grey : Colors.white)),
+            color:
+                iconColor ?? (onPressed == null ? Colors.grey : Colors.white)),
       );
     }
     return FloatingActionButton(

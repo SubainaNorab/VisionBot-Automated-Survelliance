@@ -1,0 +1,93 @@
+// firestore_command_listener.dart
+// Listens to Firestore for commands from VisionBot app
+// Relays them to ESP32 via BLE
+// Also writes car status back to Firestore
+
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
+import 'ble_navigation_service.dart';
+
+class FirestoreCommandListener {
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final BleNavigationService _ble;
+
+  StreamSubscription? _commandSub;
+  Timer? _statusTimer;
+
+  // Last known car position from GPS
+  double? lastLat;
+  double? lastLng;
+  String obstacleStatus = 'CLEAR';
+
+  FirestoreCommandListener(this._ble);
+
+  void start() {
+    _listenForCommands();
+    _startStatusReporter();
+    debugPrint('[Firestore] Command listener started');
+  }
+
+  void stop() {
+    _commandSub?.cancel();
+    _statusTimer?.cancel();
+  }
+
+  // ── Listen for commands written by VisionBot ──────────────────────────────
+  void _listenForCommands() {
+    _commandSub = _db
+        .collection('ble_commands')
+        .where('executed', isEqualTo: false)
+        .orderBy('sent_at', descending: false)
+        .snapshots()
+        .listen((snapshot) async {
+      for (final change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) {
+          final data = change.doc.data()!;
+          final cmd = data['command'] as String?;
+
+          if (cmd != null &&
+              ['F', 'L', 'R', 'S', 'E'].contains(cmd)) {
+            debugPrint('[Firestore] Received command: $cmd');
+
+            // Send via BLE to ESP32
+            await _ble.sendCommand(cmd);
+
+            // Mark as executed
+            await change.doc.reference.update({'executed': true});
+          }
+        }
+      }
+    }, onError: (e) {
+      debugPrint('[Firestore] Command listener error: $e');
+    });
+  }
+
+  // ── Report car status back to Firestore for VisionBot to see ─────────────
+  void _startStatusReporter() {
+    _statusTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      try {
+        await _db.collection('car_status').doc('current').set({
+          'online': _ble.isConnected,
+          'obstacle_status': obstacleStatus,
+          'latitude': lastLat,
+          'longitude': lastLng,
+          'updated_at': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      } catch (e) {
+        debugPrint('[Firestore] Status report error: $e');
+      }
+    });
+  }
+
+  // Call this from BLE status stream when Arduino reports BLOCKED/CLEAR
+  void updateObstacleStatus(String status) {
+    obstacleStatus = status;
+  }
+
+  // Call this from GPS position updates
+  void updatePosition(double lat, double lng) {
+    lastLat = lat;
+    lastLng = lng;
+  }
+}
