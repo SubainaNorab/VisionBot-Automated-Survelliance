@@ -1,0 +1,65 @@
+[33m15eb994[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m working on it :(
+[33m1eb5438[m updates
+[33mbb9f2ff[m working
+[33mda76ee4[m fixed errors
+[33m5ab058c[m working on adding backup
+[33m10bf2ee[m updated
+[33mc5c5d4b[m issues resolved, testing remains
+[33m20d17e6[m working on local backend, but have to resolve erros and test  it
+[33md91590f[m optimizations
+[33m1f26159[m group detection updated
+[33m4592610[m[33m ([m[1;32mcheckout[m[33m)[m everythign working for now
+[33m5923225[m storage added but have to resolve errors
+[33md523056[m merge errors resolved
+[33m7541409[m Merge pull request #1 from SubainaNorab/hadia
+[33mfe4f117[m Merge branch 'main' into hadia
+[33m873de4f[m working fine now
+[33m9c73798[m working on count error
+[33m911da30[m done some verification changes but have to test them
+[33m89e9947[m Location
+[33m7c6e743[m ok for now
+[33mdc8cc24[m for now everything working
+[33m7aedb0e[m resolved errors and working on distances
+[33ma31718e[m --
+[33m86587aa[m optimizing for robo movement
+[33mdb89fc6[m ----
+[33m77ff3a2[m Updated location
+[33md23537b[m fixes
+[33mfa59447[m location added
+[33mcb61d55[m location
+[33m12e6940[m trying to save detection images and also updating distances...................... :) :(
+[33m8b6b45d[m --
+[33m3ee6655[m updating group logic
+[33md7c88b9[m angle fixing
+[33m495d226[m adding angle adjustments
+[33mfd7284b[m resolved issue of not detecting frame
+[33mfd227e4[m adding cache for once verified perosn
+[33ma308054[m resolveed issues of low resolution , blur (when car move ),brightness
+[33m6028d03[m mutli face verification at a time
+[33m93a4bcb[m working
+[33m291c3b6[m added smoke and group , but have ot test
+[33mb5d00b4[m group working, have to resolve lacking issue
+[33mbc6e370[m added smoke and group , have to test and optimize
+[33mcc7c83f[m working on group
+[33ma305e52[m face alert system done  and workign
+[33m49dd5f8[m alerttt systemmm
+[33ma41ca29[m Merge branch 'main' of https://github.com/SubainaNorab/VisionBot-Automated-Survelliance
+[33m548690a[m added alert
+[33mbd8890b[m workign but have to test
+[33m1e5d1d1[m hace to make it work
+[33m9f6ead7[m have to resolve issue of embedding
+[33m919bbdd[m updation for firebase conflict
+[33ma2c38fb[m updations as dart version is conflicting
+[33m6240b85[m updated
+[33m7e2bc4e[m updated
+[33m005fa6d[m remove error of regex
+[33me90ff90[m updated for firebase (collection error)
+[33mc3ff7d6[m updated pubspec and gradle
+[33md174644[m updated detector and camera
+[33m59e292f[m updated verificaiotn
+[33md62ea81[m updated main
+[33mdd01f67[m updated person
+[33m5543e54[m added git ignore to not track model as so heavy
+[33md700a54[m no model as heavy
+[33m90f268e[m to resovle git issue new repo
+[33me741253[m database upload
