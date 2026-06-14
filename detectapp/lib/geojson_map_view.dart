@@ -231,27 +231,21 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   // ── Path lock ──────────────────────────────────────────────────────────────
 
   void _lockToPath() {
-    if (pathCoordinates.isEmpty) {
-      _updateState(_navState.copyWith(
-        statusMessage: 'No path loaded — cannot lock',
-      ));
-      return;
-    }
+    if (pathCoordinates.isEmpty) return;
 
     _pathTracker = PathTracker(
       path: pathCoordinates,
-      waypointThresholdM: 999.0,   // road is straight, no waypoint turns
-      onPathToleranceM: 5.0,       // within 5m = on path, no correction
-      correctionThresholdM: 10.0,  // beyond 10m = aggressive correction
+      waypointThresholdM: 6.0,    // ← was 999, now enabled for corners
+      onPathToleranceM: 5.0,
+      correctionThresholdM: 10.0,
     );
     _pathTracker!.reset();
     _lockedToPath = true;
 
     _updateState(_navState.copyWith(
-      statusMessage: '📍 Locked to path',
+      statusMessage: '📍 Locked to path — 616m loop, 10 corners',
       onPath: true,
     ));
-    debugPrint('[PATH] Locked to path with ${pathCoordinates.length} waypoints');
   }
 
   void _unlockFromPath() {
