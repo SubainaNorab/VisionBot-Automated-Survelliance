@@ -6,14 +6,13 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          73.1473058,
-          31.4620328
+          73.14736734429368,
+          31.462045103554694
         ]
       },
       "properties": {
-        "name": "Corner 0",
-        "index": 0,
-        "turn": "START"
+        "name": "WP0",
+        "index": 0
       }
     },
     {
@@ -21,14 +20,13 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          73.1474238,
-          31.4616062
+          73.14747131394752,
+          31.461669226823144
         ]
       },
       "properties": {
-        "name": "Corner 1",
-        "index": 1,
-        "turn": "L"
+        "name": "WP1",
+        "index": 1
       }
     },
     {
@@ -36,14 +34,13 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          73.1481855,
-          31.4617308
+          73.14817249480849,
+          31.461783927013876
         ]
       },
       "properties": {
-        "name": "Corner 2",
-        "index": 2,
-        "turn": "L"
+        "name": "WP2",
+        "index": 2
       }
     },
     {
@@ -51,14 +48,13 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          73.1490009,
-          31.4618921
+          73.14898665790669,
+          31.46194498233364
         ]
       },
       "properties": {
-        "name": "Corner 3",
-        "index": 3,
-        "turn": "L"
+        "name": "WP3",
+        "index": 3
       }
     },
     {
@@ -66,14 +62,13 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          73.1498204,
-          31.4620557
+          73.1497438548541,
+          31.462096144530832
         ]
       },
       "properties": {
-        "name": "Corner 4",
-        "index": 4,
-        "turn": "L"
+        "name": "WP4",
+        "index": 4
       }
     },
     {
@@ -81,14 +76,13 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          73.149756,
-          31.4622822
+          73.14969444789725,
+          31.462269912787473
         ]
       },
       "properties": {
-        "name": "Corner 5",
-        "index": 5,
-        "turn": "R"
+        "name": "WP5",
+        "index": 5
       }
     },
     {
@@ -96,14 +90,13 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          73.1496608,
-          31.4626529
+          73.1496006214313,
+          31.462635264372842
         ]
       },
       "properties": {
-        "name": "Corner 6",
-        "index": 6,
-        "turn": "L"
+        "name": "WP6",
+        "index": 6
       }
     },
     {
@@ -111,14 +104,13 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          73.1496219,
-          31.4627238
+          73.14958588758964,
+          31.462662118598406
         ]
       },
       "properties": {
-        "name": "Corner 7",
-        "index": 7,
-        "turn": "L"
+        "name": "WP7",
+        "index": 7
       }
     },
     {
@@ -126,14 +118,13 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          73.1491176,
-          31.4626357
+          73.14913127406156,
+          31.462582698705834
         ]
       },
       "properties": {
-        "name": "Corner 8",
-        "index": 8,
-        "turn": "L"
+        "name": "WP8",
+        "index": 8
       }
     },
     {
@@ -141,14 +132,13 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          73.1481024,
-          31.4624264
+          73.14811671986877,
+          31.462373531849497
         ]
       },
       "properties": {
-        "name": "Corner 9",
-        "index": 9,
-        "turn": "R"
+        "name": "WP9",
+        "index": 9
       }
     },
     {
@@ -156,14 +146,13 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          73.1472454,
-          31.4622605
+          73.1473210809415,
+          31.462219510264863
         ]
       },
       "properties": {
-        "name": "Corner 10",
-        "index": 10,
-        "turn": "L"
+        "name": "WP10",
+        "index": 10
       }
     }
   ]
