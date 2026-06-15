@@ -38,7 +38,8 @@ class FirestoreCommandListener {
     _commandSub = _db
         .collection('ble_commands')
         .where('executed', isEqualTo: false)
-        .orderBy('sent_at', descending: false)
+        // REMOVE: .orderBy('sent_at', descending: false)
+        // Composite index not needed now
         .snapshots()
         .listen((snapshot) async {
       for (final change in snapshot.docChanges) {
@@ -46,14 +47,9 @@ class FirestoreCommandListener {
           final data = change.doc.data()!;
           final cmd = data['command'] as String?;
 
-          if (cmd != null &&
-              ['F', 'L', 'R', 'S', 'E'].contains(cmd)) {
+          if (cmd != null && ['F', 'L', 'R', 'S', 'E'].contains(cmd)) {
             debugPrint('[Firestore] Received command: $cmd');
-
-            // Send via BLE to ESP32
             await _ble.sendCommand(cmd);
-
-            // Mark as executed
             await change.doc.reference.update({'executed': true});
           }
         }
