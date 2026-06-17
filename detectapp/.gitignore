@@ -44,6 +44,9 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Local secrets (optional alternative to local.properties maps.api.key)
+/android/keys.properties
+
 # model
 *tflite
 detectapp/assets/*.tflite

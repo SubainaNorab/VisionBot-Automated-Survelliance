@@ -8,7 +8,7 @@ import 'package:image/image.dart' as img;
 import 'package:geolocator/geolocator.dart';
 
 import 'camera.dart';
-import 'face_detector.dart';
+import 'face_Detector.dart';
 import 'face_verification.dart';
 import 'alert_service.dart';
 import 'sm_grp.dart';
@@ -83,13 +83,10 @@ class SurveillanceController {
   Timer? _cacheCleanupTimer;
   Timer? _verificationTimer; // ✅ Separate timer for verification
 
-  bool _lastGroupState = false;
-  bool _lastSmokeState = false;
-
   bool _processingVerification = false;
 
   final Map<String, DateTime> _recentlyVerified = {};
-  final Duration _verificationCacheDuration = Duration(seconds: 30);
+  static const Duration _verificationCacheDuration = Duration(seconds: 30);
 
   // ✅ Hybrid tracking
   int _lastYoloPeopleCount = 0;
@@ -98,8 +95,23 @@ class SurveillanceController {
   int _lastUnknownCount = 0;
   DateTime _lastGroupAlertTime = DateTime.fromMillisecondsSinceEpoch(0);
 
+<<<<<<< HEAD
   String? _currentFramePath;
   Timer? _imageCleanupTimer;
+=======
+  int _facesTooFar = 0;
+  int _facesTooClose = 0;
+  int _verificationCycle = 0;
+  Timer? _imageCleanupTimer;
+
+  String? _lastCapturedImagePath;
+  String? get _currentFramePath => _lastCapturedImagePath;
+
+  Position? _locationCache;
+  DateTime? _locationCacheTime;
+  static const Duration _locationCacheTtl = Duration(seconds: 45);
+  Future<Position?>? _locationInFlight;
+>>>>>>> origin/hadia
 
   Stream<SurveillanceState> get stateStream => _stateController.stream;
   SurveillanceState get currentState => _state;
@@ -127,6 +139,7 @@ class SurveillanceController {
       await _verifier.initialize();
       debugPrint('   ✅ Verifier ready');
 
+<<<<<<< HEAD
       debugPrint('2️⃣ Loading YOLO detector...');
       await _multi.initialize();
       debugPrint('   ✅ YOLO ready');
@@ -134,6 +147,21 @@ class SurveillanceController {
       debugPrint('3️⃣ Starting camera...');
       await _camera.initialize(preferred: preferredLens);
       debugPrint('   ✅ Camera ready');
+=======
+      debugPrint('2️⃣ Initializing YOLO detector...');
+      await _multi.initialize();
+      debugPrint('   ✅ YOLO ready');
+
+      debugPrint('3️⃣ Initializing camera...');
+      await _camera.initialize(preferred: preferredLens);
+      debugPrint('   ✅ Camera ready');
+
+      debugPrint('4️⃣ Initializing image service...');
+      await _imageService.initialize();
+      debugPrint('   ✅ Image service ready');
+
+      debugPrint('✅ All services initialized');
+>>>>>>> origin/hadia
 
       await _camera.startStream(_onFrame);
       debugPrint('✅ Camera stream started');
@@ -146,10 +174,18 @@ class SurveillanceController {
 
       debugPrint('');
       debugPrint('✅ SurveillanceController initialized');
+<<<<<<< HEAD
       debugPrint('🎯 HYBRID PARALLEL MODE:');
       debugPrint('   • YOLO: 4 FPS (real-time people detection)');
       debugPrint('   • FACE: On-demand (identity verification)');
       debugPrint('   • GROUP: YOLO(>=1) + FACE-VERIFIED = ALERT ⚡');
+=======
+      debugPrint('📁 Alert path: ${_imageService.storagePath}');
+      debugPrint(
+          '📏 Face distance: ${_detector.minFaceWidth}-${_detector.maxFaceWidth}px');
+      debugPrint('👥 People count: Based on FACE VERIFICATION');
+      debugPrint('🎯 Group detection: 1+ person = GROUP');
+>>>>>>> origin/hadia
       debugPrint('═══════════════════════════════════');
       debugPrint('');
 
@@ -157,8 +193,74 @@ class SurveillanceController {
         _startVerificationLoop();
       }
     } catch (e, st) {
+<<<<<<< HEAD
       debugPrint('❌ Init failed: $e\n$st');
       _updateState(_state.copyWith(isBooting: false, faceStatus: 'Failed'));
+=======
+      debugPrint('❌ Init failed: $e');
+      debugPrint('   Stack: $st');
+      _updateState(_state.copyWith(
+        isBooting: false,
+        faceStatus: 'Initialization failed: $e',
+      ));
+    }
+  }
+
+  Future<Position?> _getCurrentLocation() async {
+    final cached = _locationCache;
+    final cacheAt = _locationCacheTime;
+    if (cached != null &&
+        cacheAt != null &&
+        DateTime.now().difference(cacheAt) < _locationCacheTtl) {
+      return cached;
+    }
+
+    if (_locationInFlight != null) {
+      return _locationInFlight!;
+    }
+
+    _locationInFlight = _fetchGpsPosition();
+    try {
+      final pos = await _locationInFlight!;
+      if (pos != null) {
+        _locationCache = pos;
+        _locationCacheTime = DateTime.now();
+      }
+      return pos;
+    } finally {
+      _locationInFlight = null;
+    }
+  }
+
+  Future<Position?> _fetchGpsPosition() async {
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        debugPrint('⚠️ Location services disabled');
+        return null;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        debugPrint('⚠️ Location permission denied');
+        return null;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.medium,
+        timeLimit: const Duration(seconds: 12),
+      );
+
+      debugPrint('📍 Location: ${position.latitude}, ${position.longitude}');
+      return position;
+    } catch (e, st) {
+      debugPrint('❌ Location error: $e\n$st');
+      return null;
+>>>>>>> origin/hadia
     }
   }
 
@@ -176,6 +278,7 @@ class SurveillanceController {
     );
   }
 
+<<<<<<< HEAD
   Future<Position?> _getCurrentLocation() async {
     try {
       if (!await Geolocator.isLocationServiceEnabled()) return null;
@@ -189,11 +292,101 @@ class SurveillanceController {
         desiredAccuracy: LocationAccuracy.high,
         timeLimit: const Duration(seconds: 5),
       );
+=======
+  void _startContinuousVerification() {
+    if (_continuousRunning) return;
+    _continuousRunning = true;
+    debugPrint('🔄 CONTINUOUS VERIFICATION STARTED');
+    _continuousVerificationLoop();
+  }
+
+  void _stopContinuousVerification() {
+    _continuousRunning = false;
+    debugPrint('⏹️ CONTINUOUS VERIFICATION STOPPED');
+  }
+
+  Future<void> _continuousVerificationLoop() async {
+    while (_continuousRunning && mounted && _autoVerify) {
+      if (!mounted) break;
+
+      _verificationCycle++;
+
+      debugPrint('');
+      debugPrint('🔄 ══ Cycle $_verificationCycle ══');
+
+      await _runVerification();
+
+      // ✅ Small delay between cycles to prevent overload
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
+    _continuousRunning = false;
+  }
+
+  void _startStatusPolling() {
+    _statusTimer?.cancel();
+    _statusTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (!mounted) return;
+
+      final det = _multi.lastResult;
+      int yoloPeople = det.personCount;
+
+      final timeSinceVerification =
+          DateTime.now().difference(_lastVerificationTime);
+      final hasRecentVerification = timeSinceVerification.inSeconds < 10;
+
+      int totalPeople = yoloPeople;
+      String peopleBreakdown = '';
+
+      if (hasRecentVerification && _lastVerifiedPeopleCount > 0) {
+        totalPeople = max(yoloPeople, _lastVerifiedPeopleCount);
+
+        if (_lastKnownCount > 0 || _lastUnknownCount > 0) {
+          peopleBreakdown =
+              ' ($_lastKnownCount known, $_lastUnknownCount unknown';
+
+          if (yoloPeople > _lastVerifiedPeopleCount) {
+            peopleBreakdown +=
+                ', ${yoloPeople - _lastVerifiedPeopleCount} unverified';
+          }
+
+          peopleBreakdown += ')';
+        }
+
+        debugPrint('👥 Status: $totalPeople$peopleBreakdown');
+      } else if (yoloPeople > 0) {
+        String peopleBreakdown = ' (YOLO)';
+        debugPrint('👥 Status: $yoloPeople$peopleBreakdown');
+      }
+    });
+  }
+
+  void _startCacheCleanup() {
+    _cacheCleanupTimer?.cancel();
+    _cacheCleanupTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) {
+        _cleanVerificationCache();
+      }
+    });
+  }
+
+  void _cleanVerificationCache() {
+    try {
+      final now = DateTime.now();
+      final before = _recentlyVerified.length;
+      _recentlyVerified.removeWhere(
+          (name, time) => now.difference(time) > _verificationCacheDuration);
+      final after = _recentlyVerified.length;
+      if (before != after) {
+        debugPrint('🧹 Cache: removed ${before - after} entries');
+      }
+>>>>>>> origin/hadia
     } catch (e) {
       return null;
     }
   }
 
+<<<<<<< HEAD
   String? _formatLocation(Position? position) {
     if (position == null) return null;
     return '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}';
@@ -212,6 +405,11 @@ class SurveillanceController {
   void _stopVerificationLoop() {
     _verificationTimer?.cancel();
     debugPrint('⏹️ Verification loop stopped');
+=======
+void _onFrame(CameraImage image) {
+    if (!_multi.isInitialized || !mounted) return;
+    _multi.detectAllAsync(image);
+>>>>>>> origin/hadia
   }
 
   // ✅ ASYNC verification - doesn't block YOLO detection
@@ -237,6 +435,7 @@ class SurveillanceController {
 
   Future<void> _runVerificationInternal() async {
     XFile? shot;
+<<<<<<< HEAD
     bool streamWasStopped = false;
 
     try {
@@ -248,6 +447,37 @@ class SurveillanceController {
       }
 
       if (!mounted) return;
+=======
+
+    try {
+      try {
+        if (_camera.controller?.value.isStreamingImages ?? false) {
+          await _camera.stopStream();
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+      } catch (e) {
+        debugPrint('⚠️ Stop stream: $e');
+      }
+
+      if (!mounted) return;
+
+      try {
+        shot = await _camera.takePicture();
+      } catch (e) {
+        debugPrint('⚠️ Take picture failed, retrying');
+        await Future.delayed(const Duration(milliseconds: 200));
+
+        try {
+          if (!(_camera.controller?.value.isInitialized ?? false)) {
+            await _camera.initialize(preferred: _camera.lensDirection);
+          }
+        } catch (e2) {
+          rethrow;
+        }
+
+        shot = await _camera.takePicture();
+      }
+>>>>>>> origin/hadia
 
       shot = await _camera.takePicture();
       _currentFramePath = shot.path;
@@ -256,7 +486,6 @@ class SurveillanceController {
       if (mounted && _camera.isInitialized) {
         try {
           unawaited(_camera.startStream(_onFrame));
-          streamWasStopped = false;
         } catch (e) {
           debugPrint('⚠️ Restart stream: $e');
         }
@@ -269,7 +498,6 @@ class SurveillanceController {
       try {
         faceInfos = await _detector.detectAndCropAllFacesWithDistance(shot.path);
       } catch (e) {
-        _lastVerifiedPeopleCount = 0;
         _lastKnownCount = 0;
         _lastUnknownCount = 0;
 
@@ -294,7 +522,11 @@ class SurveillanceController {
       if (validFaces.isEmpty) {
         if (mounted) {
           _updateState(_state.copyWith(
+<<<<<<< HEAD
             faceStatus: '${faceInfos.length} detected but distance invalid',
+=======
+            faceStatus: '${faceInfos.length} detected but $reason',
+>>>>>>> origin/hadia
           ));
         }
 
@@ -307,10 +539,17 @@ class SurveillanceController {
 
       if (!mounted) return;
 
+<<<<<<< HEAD
       await _processVerificationResults(results, shot.path, validFaces);
       _scheduleImageCleanup(shot.path);
     } catch (e, st) {
       debugPrint('❌ Verification: $e\n$st');
+=======
+      // Cleanup original (keep backup longer for alerts)
+      _scheduleImageCleanup(shot.path, delay: const Duration(seconds: 3));
+    } catch (e) {
+      debugPrint('⚠️ Verification error: $e');
+>>>>>>> origin/hadia
 
       if (streamWasStopped && mounted && _camera.isInitialized) {
         try {
@@ -322,6 +561,7 @@ class SurveillanceController {
     }
   }
 
+<<<<<<< HEAD
   void _startStatusPolling() {
     _statusTimer?.cancel();
     // ✅ Update UI more frequently to show real-time YOLO + Face sync
@@ -507,6 +747,24 @@ class SurveillanceController {
         File(imagePath).deleteSync();
       } catch (_) {}
     });
+=======
+  void _scheduleImageCleanup(
+    String imagePath, {
+    Duration delay = const Duration(seconds: 30),
+  }) {
+    _imageCleanupTimer?.cancel();
+    _imageCleanupTimer = Timer(delay, () {
+    try {
+      File(imagePath).deleteSync();
+    } catch (_) {}
+    });
+  }
+
+  void _cleanupImage(String imagePath) {
+    try {
+      File(imagePath).deleteSync();
+    } catch (_) {}
+>>>>>>> origin/hadia
   }
 
   Future<void> _processVerificationResults(
@@ -517,8 +775,12 @@ class SurveillanceController {
     try {
       int knownCount = 0;
       int unknownCount = 0;
+<<<<<<< HEAD
       final knownNames = <String>{};
       bool hasUnknownFace = false;
+=======
+      final knownNames = <String>[];
+>>>>>>> origin/hadia
 
       for (final result in results) {
         if (result.verified && result.person != null) {
@@ -534,16 +796,24 @@ class SurveillanceController {
           }
 
           _recentlyVerified[name] = DateTime.now();
+<<<<<<< HEAD
           knownNames.add(name);
+=======
+
+          if (!knownNames.contains(name)) {
+            knownNames.add(name);
+          }
+          knownCount++;
+>>>>>>> origin/hadia
         } else {
           unknownCount++;
-          hasUnknownFace = true;
           debugPrint('⚠️ UNKNOWN');
         }
       }
 
       _lastKnownCount = knownNames.length;
       _lastUnknownCount = unknownCount;
+<<<<<<< HEAD
 
       if (hasUnknownFace && unknownCount > 0) {
         debugPrint('🚨 UNKNOWN FACE: $unknownCount');
@@ -575,11 +845,37 @@ class SurveillanceController {
           }
         } catch (e) {
           debugPrint('⚠️ Face upload failed');
+=======
+      _lastVerifiedPeopleCount = knownNames.length + unknownCount;
+      _lastVerificationTime = DateTime.now();
+
+      debugPrint(
+          '📊 Cycle $_verificationCycle: $knownCount known, $unknownCount unknown');
+
+      if (unknownCount > 0) {
+        final lensName = _camera.lensDirection == CameraLensDirection.front
+            ? 'front'
+            : 'back';
+        final savedImagePath = _lastCapturedImagePath;
+        final position = await _getCurrentLocation();
+
+        List<String>? savedFacePaths;
+        try {
+          savedFacePaths = await _imageService.saveFaceImages(
+            detectedFaces,
+            alertType: 'unknown_face',
+            sessionInfo: 'u${unknownCount}_k$knownCount',
+          );
+          debugPrint('✅ Saved ${savedFacePaths.length} face crops');
+        } catch (e) {
+          debugPrint('❌ Face save failed: $e');
+>>>>>>> origin/hadia
         }
 
         await _alertService.createUnknownAlert(
           threshold: FaceVerificationService.threshold,
           lens: lensName,
+<<<<<<< HEAD
           note: '$unknownCount unknown face(s)',
           imagePath: frameUrl,
           faceImagePaths: faceUrls,
@@ -602,10 +898,25 @@ class SurveillanceController {
         statusMsg = 'Scanning...';
       }
 
+=======
+          note: '$unknownCount unknown face(s) detected',
+          imagePath: savedImagePath,
+          faceImagePaths: savedFacePaths,
+          latitude: position?.latitude,
+          longitude: position?.longitude,
+          locationName: position != null
+              ? '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}'
+              : null,
+        );
+      }
+
+>>>>>>> origin/hadia
       if (mounted) {
         _updateState(_state.copyWith(
-          faceStatus: statusMsg,
-          lastMatch: knownList.isNotEmpty ? knownList.join(', ') : '',
+          faceStatus: unknownCount > 0
+              ? '⚠️ $unknownCount unknown'
+              : '✅ $knownCount verified',
+          lastMatch: knownNames.isNotEmpty ? knownNames.join(', ') : '',
         ));
       }
     } catch (e, st) {
@@ -655,8 +966,6 @@ class SurveillanceController {
       }
 
       _alertService.resetCooldowns();
-      _lastGroupState = false;
-      _lastSmokeState = false;
       _recentlyVerified.clear();
       _processingVerification = false;
 
@@ -683,6 +992,35 @@ class SurveillanceController {
 
   void setGroupThreshold(int threshold) {
     _multi.setGroupThreshold(threshold);
+  }
+
+  /// Stops ML + camera stream before the Location tab mounts Google Maps.
+  /// Camera preview + Maps platform view together commonly crash Android GPUs.
+  Future<void> pauseForMapTab() async {
+    _stopContinuousVerification();
+    try {
+      if (_camera.controller?.value.isStreamingImages ?? false) {
+        await _camera.stopStream();
+      }
+    } catch (e) {
+      debugPrint('⚠️ pauseForMapTab stopStream: $e');
+    }
+    await Future.delayed(const Duration(milliseconds: 280));
+  }
+
+  /// Restores surveillance after leaving the Location tab.
+  Future<void> resumeFromMapTab() async {
+    try {
+      if (_camera.isInitialized &&
+          !(_camera.controller?.value.isStreamingImages ?? false)) {
+        await _camera.startStream(_onFrame);
+      }
+    } catch (e) {
+      debugPrint('⚠️ resumeFromMapTab startStream: $e');
+    }
+    if (_autoVerify && mounted) {
+      _startContinuousVerification();
+    }
   }
 
   void _updateState(SurveillanceState newState) {
@@ -723,7 +1061,7 @@ class SurveillanceController {
 
     if (_currentFramePath != null) {
       try {
-        await File(_currentFramePath!).delete();
+        await File(_lastCapturedImagePath!).delete();
       } catch (_) {}
     }
 

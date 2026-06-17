@@ -1,0 +1,3 @@
+# Copy to android/keys.properties (gitignored — add keys.properties to .gitignore if you use this file)
+# Or set maps.api.key in android/local.properties instead.
+maps.api.key=PASTE_YOUR_ANDROID_MAPS_SDK_KEY_HERE

@@ -14,6 +14,8 @@ dependencies:
   google_mlkit_face_detection: ^0.10.0
   flutter_dotenv: ^5.1.0
   image: ^4.0.17
+  google_maps_flutter: ^2.5.3
+  latlong2: ^0.9.1
   
   tflite_flutter: ^0.11.0
   cloud_firestore: ^4.13.6
@@ -22,11 +24,17 @@ dependencies:
   device_info_plus: ^10.0.1
   geolocator: ^9.0.2  
   cupertino_icons: ^1.0.2
+<<<<<<< HEAD
   supabase_flutter: ^1.10.0
   
 dependency_overrides:
   sign_in_with_apple: ^6.1.0
    
+=======
+
+  flutter_blue_plus: ^1.31.0
+
+>>>>>>> origin/hadia
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -39,4 +47,10 @@ flutter:
     - assets/facenet.tflite
     - assets/yolov8n.tflite
     - assets/smoking.tflite
+<<<<<<< HEAD
     - .env
+=======
+    - assets/geo/path.geojson
+    - assets/geo/boundaries.geojson
+    - assets/geo/waypoints.geojson
+>>>>>>> origin/hadia

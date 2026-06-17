@@ -1,7 +1,6 @@
 // sm_grp.dart - OPTIMIZED: Better performance, caching, smart processing
 
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -271,7 +270,47 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
 (int, List<double>) _countPersons(List output) {
   final preds = output[0] as List<List<double>>;
   const int inputSize = 640;
+<<<<<<< HEAD
   const double CONFIDENCE_THRESHOLD = 0.25;
+=======
+
+  // ✅ STEP 1: Analyze raw output
+  double maxPersonScore = 0.0;
+  int bestIdx = -1;
+  
+  for (int i = 0; i < 8400; i++) {
+    final personScore = preds[4][i];
+    if (personScore > maxPersonScore) {
+      maxPersonScore = personScore;
+      bestIdx = i;
+    }
+  }
+
+  debugPrint('🔍 YOLO Analysis:');
+  debugPrint('   Max score: ${maxPersonScore.toStringAsFixed(4)}');
+  
+  if (bestIdx >= 0) {
+    final rawCx = preds[0][bestIdx];
+    final rawCy = preds[1][bestIdx];
+    final rawBw = preds[2][bestIdx];
+    final rawBh = preds[3][bestIdx];
+    
+    if (rawCx <= 1.5 && rawCy <= 1.5 && rawBw <= 1.5 && rawBh <= 1.5) {
+      debugPrint('   Format: NORMALIZED');
+    } else {
+      debugPrint('   Format: PIXEL');
+    }
+  }
+  
+  // ✅ STEP 2: Collect boxes with HIGHER confidence threshold
+  final boxes = <_Box>[];
+  int candidateCount = 0;
+  int filteredSmall = 0;
+  int filteredLowConf = 0;
+
+  // ✅ INCREASED: 0.25 (was 0.15) - More strict = less false positives
+  const double confidenceThreshold = 0.25;
+>>>>>>> origin/hadia
 
   final boxes = <_Box>[];
   double maxScore = 0;
@@ -280,8 +319,17 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
   for (int i = 0; i < 8400; i++) {
     final personScore = preds[4][i];
     
+<<<<<<< HEAD
     if (personScore > maxScore) maxScore = personScore;
     if (personScore < CONFIDENCE_THRESHOLD) continue;
+=======
+    if (personScore < confidenceThreshold) {
+      filteredLowConf++;
+      continue;
+    }
+    
+    candidateCount++;
+>>>>>>> origin/hadia
 
     double cx = preds[0][i];
     double cy = preds[1][i];

@@ -1,0 +1,159 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.1473058,
+          31.4620328
+        ]
+      },
+      "properties": {
+        "name": "WP0",
+        "index": 0
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.1474238,
+          31.4616062
+        ]
+      },
+      "properties": {
+        "name": "WP1",
+        "index": 1
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.1481855,
+          31.4617308
+        ]
+      },
+      "properties": {
+        "name": "WP2",
+        "index": 2
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.1490009,
+          31.4618921
+        ]
+      },
+      "properties": {
+        "name": "WP3",
+        "index": 3
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.1498204,
+          31.4620557
+        ]
+      },
+      "properties": {
+        "name": "WP4",
+        "index": 4
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.149756,
+          31.4622822
+        ]
+      },
+      "properties": {
+        "name": "WP5",
+        "index": 5
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.1496608,
+          31.4626529
+        ]
+      },
+      "properties": {
+        "name": "WP6",
+        "index": 6
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.1496219,
+          31.4627238
+        ]
+      },
+      "properties": {
+        "name": "WP7",
+        "index": 7
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.1491176,
+          31.4626357
+        ]
+      },
+      "properties": {
+        "name": "WP8",
+        "index": 8
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.1481024,
+          31.4624264
+        ]
+      },
+      "properties": {
+        "name": "WP9",
+        "index": 9
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          73.1472454,
+          31.4622605
+        ]
+      },
+      "properties": {
+        "name": "WP10",
+        "index": 10
+      }
+    }
+  ]
+}

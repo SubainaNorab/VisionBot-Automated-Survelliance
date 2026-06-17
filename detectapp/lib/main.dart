@@ -1,16 +1,23 @@
 // main.dart - Hybrid Detection System with Complete Optimizations
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'firebase_options.dart';
+<<<<<<< HEAD
 import 'supabase_service.dart';
+=======
+import 'geojson_map_view.dart';
+>>>>>>> origin/hadia
 import 'survelliance_controller.dart';
+import 'custom_app_bar.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+<<<<<<< HEAD
   
   debugPrint('');
   debugPrint('╔═══════════════════════════════════╗');
@@ -103,6 +110,35 @@ Future<void> _requestAllPermissions() async {
     
   } catch (e) {
     debugPrint('❌ Permission request failed: $e');
+=======
+
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  await _requestAllPermissions();
+
+  runApp(const VisionBot());
+}
+
+Future<void> _requestAllPermissions() async {
+  debugPrint('🔐 Requesting permissions...');
+
+  Future<void> one(Permission p) async {
+    try {
+      final status = await p.request();
+      debugPrint('   ${p.toString().split('.').last}: $status');
+    } catch (e) {
+      debugPrint('   ${p.toString().split('.').last}: failed ($e)');
+    }
+  }
+
+  await one(Permission.camera);
+  await one(Permission.locationWhenInUse);
+  await one(Permission.storage);
+  await one(Permission.photos);
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    await one(Permission.bluetoothScan);
+    await one(Permission.bluetoothConnect);
+>>>>>>> origin/hadia
   }
 }
 
@@ -114,11 +150,16 @@ class VisionBot extends StatelessWidget {
     return MaterialApp(
       title: 'VisionBot Surveillance',
       debugShowCheckedModeBanner: false,
+<<<<<<< HEAD
       theme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
         colorSchemeSeed: Colors.orange,
       ),
+=======
+      theme: ThemeData(useMaterial3: true, brightness: Brightness.dark),
+      routes: {'/debug/geojson-map': (_) => const GeoJSONMapView()},
+>>>>>>> origin/hadia
       home: const SurveillanceScreen(),
     );
   }
@@ -131,27 +172,69 @@ class SurveillanceScreen extends StatefulWidget {
   State<SurveillanceScreen> createState() => _SurveillanceScreenState();
 }
 
+<<<<<<< HEAD
 class _SurveillanceScreenState extends State<SurveillanceScreen> 
     with WidgetsBindingObserver {
   late final SurveillanceController _controller;
   
   // ✅ Optimization: Cache last state to avoid unnecessary rebuilds
   late SurveillanceState _lastState;
+=======
+class _SurveillanceScreenState extends State<SurveillanceScreen>
+    with WidgetsBindingObserver, TickerProviderStateMixin {
+  late final SurveillanceController _controller;
+  late final TabController _tabController;
+
+  /// Map widget mounts only after the camera image stream is stopped (Android stability).
+  bool _mapContentReady = false;
+>>>>>>> origin/hadia
 
   @override
   void initState() {
     super.initState();
-    
+
     WidgetsBinding.instance.addObserver(this);
-    
+
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(_onMainTabChanged);
+
     _controller = SurveillanceController(groupThreshold: 1);
+<<<<<<< HEAD
     _lastState = _controller.currentState;
     
+=======
+
+>>>>>>> origin/hadia
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _controller.initialize();
       }
     });
+  }
+
+  void _onMainTabChanged() {
+    if (_tabController.indexIsChanging) return;
+    if (_tabController.index == 1) {
+      _prepareMapTab();
+    } else {
+      _prepareSurveillanceTab();
+    }
+  }
+
+  Future<void> _prepareMapTab() async {
+    if (!mounted) return;
+    setState(() => _mapContentReady = false);
+    await _controller.pauseForMapTab();
+    if (!mounted || _tabController.index != 1) return;
+    setState(() => _mapContentReady = true);
+  }
+
+  Future<void> _prepareSurveillanceTab() async {
+    if (!mounted) return;
+    setState(() => _mapContentReady = false);
+    await _controller.resumeFromMapTab();
+    if (!mounted || _tabController.index != 0) return;
+    setState(() {});
   }
 
   @override
@@ -171,7 +254,9 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
 
   @override
   void dispose() {
+    _tabController.removeListener(_onMainTabChanged);
     WidgetsBinding.instance.removeObserver(this);
+    _tabController.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -188,6 +273,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
 
         return Scaffold(
           backgroundColor: Colors.black,
+<<<<<<< HEAD
           appBar: AppBar(
             title: const Text(
               'VisionBot Surveillance',
@@ -248,14 +334,119 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                       top: 8,
                       left: 8,
                       child: _buildAutoVerifyStatus(),
+=======
+          appBar: VisionBotAppBar(
+            tabController: _tabController,
+            onSettingsPressed: () => _showDetectionSettings(context),
+            onSwitchCameraPressed: _controller.switchCamera,
+            onVerifyFacePressed: _controller.verifyFace,
+            isProcessingFace: state.processingFace,
+          ),
+          // TabBarView keeps every child alive → camera + Google Map often crash Android.
+          // Show exactly one heavy surface at a time; pause camera before mounting the map.
+          body: AnimatedBuilder(
+            animation: _tabController,
+            builder: (context, _) {
+              final onLocation = _tabController.index == 1;
+              if (!onLocation) {
+                return Column(
+                  children: [
+                    Expanded(
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: _controller.camera.buildPreview(),
+                          ),
+                          if (state.isBooting)
+                            const Positioned.fill(
+                              child: Center(child: CircularProgressIndicator()),
+                            ),
+                          Positioned(
+                              top: 8, right: 8, child: _LiveIndicator()),
+                          Positioned(
+                            top: 8,
+                            left: 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black87,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: _controller.autoVerify
+                                      ? Colors.green
+                                      : Colors.grey,
+                                  width: 2,
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    _controller.autoVerify
+                                        ? Icons.check_circle
+                                        : Icons.cancel,
+                                    color: _controller.autoVerify
+                                        ? Colors.green
+                                        : Colors.grey,
+                                    size: 16,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    'Auto: ${_controller.autoVerify ? "ON" : "OFF"}',
+                                    style: TextStyle(
+                                      color: _controller.autoVerify
+                                          ? Colors.green
+                                          : Colors.grey,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+>>>>>>> origin/hadia
+                    ),
+                    _CompactStatusPanel(
+                      state: state,
+                      autoVerify: _controller.autoVerify,
+                      onAutoVerifyChanged: _controller.setAutoVerify,
+                      onVerifyPressed: _controller.verifyFace,
                     ),
                   ],
+<<<<<<< HEAD
                 ),
               ),
 
               // ✅ Optimized status panel
               _buildStatusPanel(state),
             ],
+=======
+                );
+              }
+              if (!_mapContentReady) {
+                return const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 16),
+                      Text(
+                        'Preparing map…',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                );
+              }
+              return const GeoJSONMapView();
+            },
+>>>>>>> origin/hadia
           ),
         );
       },
@@ -449,13 +640,29 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
               ),
               const SizedBox(height: 16),
+<<<<<<< HEAD
               
               // ✅ Close Range
+=======
+>>>>>>> origin/hadia
               ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                title: const Text('Close Range (1-2m)', style: TextStyle(fontSize: 14)),
-                subtitle: const Text('Face: 100-400px', style: TextStyle(fontSize: 11)),
-                leading: const Icon(Icons.person, color: Colors.orange, size: 20),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 4,
+                ),
+                title: const Text(
+                  'Close Range (1-2m)',
+                  style: TextStyle(fontSize: 14),
+                ),
+                subtitle: const Text(
+                  'Face: 100-400px',
+                  style: TextStyle(fontSize: 11),
+                ),
+                leading: const Icon(
+                  Icons.person,
+                  color: Colors.orange,
+                  size: 20,
+                ),
                 onTap: () {
                   _controller.setDistanceThresholds(
                     minWidth: 100,
@@ -467,15 +674,25 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                   _showSnackbar('✅ Close range (1-2m)');
                 },
               ),
+<<<<<<< HEAD
               
               // ✅ Medium Range (Recommended)
+=======
+>>>>>>> origin/hadia
               Container(
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.green, width: 2),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: ListTile(
+<<<<<<< HEAD
                   contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+=======
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+>>>>>>> origin/hadia
                   title: const Text(
                     'Medium Range (2-4m)',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
@@ -484,7 +701,15 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                     'Face: 50-500px | RECOMMENDED',
                     style: TextStyle(fontSize: 11, color: Colors.green),
                   ),
+<<<<<<< HEAD
                   leading: const Icon(Icons.groups, color: Colors.green, size: 20),
+=======
+                  leading: const Icon(
+                    Icons.groups,
+                    color: Colors.green,
+                    size: 20,
+                  ),
+>>>>>>> origin/hadia
                   onTap: () {
                     _controller.setDistanceThresholds(
                       minWidth: 50,
@@ -497,15 +722,31 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                   },
                 ),
               ),
+<<<<<<< HEAD
               
               const SizedBox(height: 8),
               
               // ✅ Long Range
+=======
+>>>>>>> origin/hadia
               ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                title: const Text('Long Range (3-6m)', style: TextStyle(fontSize: 14)),
-                subtitle: const Text('Face: 30-600px', style: TextStyle(fontSize: 11)),
-                leading: const Icon(Icons.visibility, color: Colors.blue, size: 20),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 4,
+                ),
+                title: const Text(
+                  'Long Range (3-6m)',
+                  style: TextStyle(fontSize: 14),
+                ),
+                subtitle: const Text(
+                  'Face: 30-600px',
+                  style: TextStyle(fontSize: 11),
+                ),
+                leading: const Icon(
+                  Icons.visibility,
+                  color: Colors.blue,
+                  size: 20,
+                ),
                 onTap: () {
                   _controller.setDistanceThresholds(
                     minWidth: 30,
@@ -544,12 +785,162 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
   }
 }
 
+<<<<<<< HEAD
 // ✅ HYBRID Detection Display Widget
 class _HybridDetectionDisplay extends StatelessWidget {
   final int yoloPeopleCount;
   final int verifiedPeopleCount;
   final int knownCount;
   final int unknownCount;
+=======
+class _LiveIndicator extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black87,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.red.withOpacity(0.5), width: 1),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.fiber_manual_record, color: Colors.red, size: 10),
+          SizedBox(width: 4),
+          Text(
+            'LIVE',
+            style: TextStyle(
+              color: Colors.greenAccent,
+              fontWeight: FontWeight.bold,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CompactStatusPanel extends StatelessWidget {
+  final SurveillanceState state;
+  final bool autoVerify;
+  final ValueChanged<bool> onAutoVerifyChanged;
+  final VoidCallback onVerifyPressed;
+
+  const _CompactStatusPanel({
+    required this.state,
+    required this.autoVerify,
+    required this.onAutoVerifyChanged,
+    required this.onVerifyPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black87,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Face verification status
+          Row(
+            children: [
+              const Icon(Icons.face, color: Colors.blueAccent, size: 14),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  state.faceStatus,
+                  style: const TextStyle(
+                    color: Colors.blueAccent,
+                    fontSize: 11,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // ✅ YOLO Detection status (People + Group + Smoke)
+          _YoloDetectionDisplay(
+            peopleCount: state.peopleCount,
+            groupDetected: state.groupDetected,
+            smokingDetected: state.smokingDetected,
+          ),
+          const SizedBox(height: 8),
+
+          // Auto verify toggle
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: autoVerify
+                      ? Colors.green.withOpacity(0.2)
+                      : Colors.grey.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: autoVerify ? Colors.green : Colors.grey,
+                    width: 2,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Switch(
+                      value: autoVerify,
+                      onChanged: onAutoVerifyChanged,
+                      activeThumbColor: Colors.green,
+                      materialTapTargetSize: MaterialTapTargetSize.padded,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Auto Verify',
+                      style: TextStyle(
+                        color: autoVerify ? Colors.green : Colors.grey,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const Spacer(),
+
+              // Manual verify button
+              SizedBox(
+                height: 36,
+                child: ElevatedButton.icon(
+                  onPressed: state.processingFace ? null : onVerifyPressed,
+                  icon: const Icon(Icons.face, size: 14),
+                  label: Text(
+                    state.processingFace ? 'Processing...' : 'Verify',
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    visualDensity: VisualDensity.comfortable,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _YoloDetectionDisplay extends StatelessWidget {
+  final int peopleCount;
+>>>>>>> origin/hadia
   final bool groupDetected;
   final bool smokingDetected;
 
@@ -581,7 +972,7 @@ class _HybridDetectionDisplay extends StatelessWidget {
           // ✅ HYBRID: Show both YOLO and verified counts
           Row(
             children: [
-              Icon(Icons.people, color: Colors.orangeAccent, size: 18),
+              const Icon(Icons.people, color: Colors.orangeAccent, size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(
@@ -609,14 +1000,17 @@ class _HybridDetectionDisplay extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          
+
           // ✅ Group + Smoke status
           Row(
             children: [
               // Group detection: YOLO + FACE
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: groupDetected
                         ? Colors.red.withOpacity(0.2)
@@ -650,13 +1044,16 @@ class _HybridDetectionDisplay extends StatelessWidget {
                   ),
                 ),
               ),
-              
+
               const SizedBox(width: 8),
-              
+
               // Smoking detection
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: smokingDetected
                         ? Colors.red.withOpacity(0.2)
@@ -675,6 +1072,7 @@ class _HybridDetectionDisplay extends StatelessWidget {
                         size: 16,
                       ),
                       const SizedBox(width: 4),
+<<<<<<< HEAD
                       Expanded(
                         child: Text(
                           smokingDetected ? 'Smoke: YES' : 'Smoke: NO',
@@ -684,6 +1082,15 @@ class _HybridDetectionDisplay extends StatelessWidget {
                             fontSize: 11,
                           ),
                           overflow: TextOverflow.ellipsis,
+=======
+                      Text(
+                        'Smoke: ${smokingDetected ? "YES" : "NO"}',
+                        style: TextStyle(
+                          color:
+                              smokingDetected ? Colors.redAccent : Colors.grey,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+>>>>>>> origin/hadia
                         ),
                       ),
                     ],
@@ -697,6 +1104,7 @@ class _HybridDetectionDisplay extends StatelessWidget {
     );
   }
 }
+<<<<<<< HEAD
 
 class ErrorApp extends StatelessWidget {
   final String error;
@@ -740,3 +1148,5 @@ class ErrorApp extends StatelessWidget {
     );
   }
 }
+=======
+>>>>>>> origin/hadia
