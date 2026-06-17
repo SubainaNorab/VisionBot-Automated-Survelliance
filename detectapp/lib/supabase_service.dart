@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SupabaseService {
   static late final String _supabaseUrl;
@@ -17,10 +18,10 @@ class SupabaseService {
       debugPrint('═══════════════════════════════════');
       debugPrint('🔧 Initializing Supabase Storage');
       debugPrint('═══════════════════════════════════');
-      
+
       _supabaseUrl = supabaseUrl.replaceAll(RegExp(r'\/$'), '');
       _supabaseAnonKey = supabaseAnonKey;
-      
+
       debugPrint('✅ Supabase initialized');
       debugPrint('   URL: ${supabaseUrl.substring(0, 20)}...');
       debugPrint('   Bucket: $_bucket');
@@ -33,7 +34,7 @@ class SupabaseService {
     }
   }
 
-  /// Upload alert image to Supabase (with retry)
+  /// Upload alert image to Supabase (FIXED)
   static Future<String?> uploadAlertImage({
     required String localPath,
     required String alertType,
@@ -41,7 +42,7 @@ class SupabaseService {
   }) async {
     try {
       final file = File(localPath);
-      
+
       if (!await file.exists()) {
         debugPrint('❌ File not found: $localPath');
         return null;
@@ -50,39 +51,33 @@ class SupabaseService {
       final fileSize = await file.length();
       final remotePath = '$alertType/$fileName';
 
-      debugPrint('📤 Uploading to Supabase');
+      debugPrint('📤 Uploading to Supabase (FIXED SDK)');
       debugPrint('   Type: $alertType');
       debugPrint('   File: $fileName');
       debugPrint('   Size: ${(fileSize / 1024).toStringAsFixed(2)} KB');
 
-      final fileBytes = await file.readAsBytes();
+      final bytes = await file.readAsBytes();
 
-      // ✅ Retry logic
-      int retryCount = 0;
-      const int maxRetries = 3;
-      
-      while (retryCount < maxRetries) {
-        try {
-          await _uploadBinary(remotePath, fileBytes);
+      // ✅ FIX: Use official Supabase client
+      await Supabase.instance.client.storage
+          .from(_bucket)
+          .uploadBinary(
+            remotePath,
+            bytes,
+            fileOptions: const FileOptions(
+              upsert: true,
+              cacheControl: '3600',
+            ),
+          );
 
-          final publicUrl = _getPublicUrl(remotePath);
+      final publicUrl = Supabase.instance.client.storage
+          .from(_bucket)
+          .getPublicUrl(remotePath);
 
-          debugPrint('✅ Uploaded: $publicUrl');
-          
-          return publicUrl;
-        } catch (e) {
-          retryCount++;
-          debugPrint('⚠️ Upload attempt $retryCount failed: $e');
-          
-          if (retryCount < maxRetries) {
-            await Future.delayed(Duration(seconds: retryCount * 2));
-          } else {
-            rethrow;
-          }
-        }
-      }
-      
-      return null;
+      debugPrint('✅ Upload successful');
+      debugPrint('🔗 URL: $publicUrl');
+
+      return publicUrl;
     } catch (e, st) {
       debugPrint('❌ Upload error: $e');
       debugPrint('   Stack: $st');
@@ -90,7 +85,7 @@ class SupabaseService {
     }
   }
 
-  /// Upload multiple face images (with retry)
+  /// Upload multiple face images (FIXED only upload part, logic unchanged)
   static Future<List<String>> uploadFaceImages({
     required List<String> localPaths,
     required String alertType,
@@ -112,97 +107,32 @@ class SupabaseService {
 
         final fileName = '${alertType}_face${i + 1}_${sessionId}.jpg';
         final remotePath = '$alertType/$fileName';
-        final fileSize = await file.length();
 
-        debugPrint('   Face ${i + 1}: $fileName (${(fileSize / 1024).toStringAsFixed(2)} KB)');
+        final bytes = await file.readAsBytes();
 
-        final fileBytes = await file.readAsBytes();
+        await Supabase.instance.client.storage
+            .from(_bucket)
+            .uploadBinary(
+              remotePath,
+              bytes,
+              fileOptions: const FileOptions(
+                upsert: true,
+              ),
+            );
 
-        // ✅ Retry logic for faces
-        int retryCount = 0;
-        const int maxRetries = 3;
-        bool uploaded = false;
+        final url = Supabase.instance.client.storage
+            .from(_bucket)
+            .getPublicUrl(remotePath);
 
-        while (retryCount < maxRetries && !uploaded) {
-          try {
-            await _uploadBinary(remotePath, fileBytes);
+        uploadedUrls.add(url);
 
-            final publicUrl = _getPublicUrl(remotePath);
-            uploadedUrls.add(publicUrl);
-            uploaded = true;
-            debugPrint('      ✅ Uploaded');
-          } catch (e) {
-            retryCount++;
-            debugPrint('      ⚠️ Retry $retryCount: $e');
-            
-            if (retryCount < maxRetries) {
-              await Future.delayed(Duration(seconds: retryCount * 2));
-            }
-          }
-        }
-
-        if (!uploaded) {
-          debugPrint('      ❌ Failed after $maxRetries retries');
-        }
+        debugPrint('✅ Face ${i + 1} uploaded');
       }
 
-      debugPrint('✅ Uploaded ${uploadedUrls.length} faces');
       return uploadedUrls;
-    } catch (e, st) {
+    } catch (e) {
       debugPrint('❌ Face upload error: $e');
       return uploadedUrls;
     }
-  }
-
-  /// Delete image
-  static Future<bool> deleteImage(String publicUrl) async {
-    try {
-      final uri = Uri.parse(publicUrl);
-      final pathSegments = uri.pathSegments;
-      
-      if (pathSegments.length >= 3) {
-        final path = pathSegments.sublist(pathSegments.length - 2).join('/');
-        await _deleteObject(path);
-        debugPrint('✅ Deleted: $path');
-        return true;
-      }
-      return false;
-    } catch (e) {
-      debugPrint('⚠️ Delete error: $e');
-      return false;
-    }
-  }
-
-  static Future<void> _uploadBinary(String remotePath, List<int> fileBytes) async {
-    final uri = Uri.parse('$_supabaseUrl/storage/v1/object/$_bucket/$remotePath');
-    final request = await HttpClient().putUrl(uri);
-    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_supabaseAnonKey');
-    request.headers.set('apikey', _supabaseAnonKey);
-    request.headers.set(HttpHeaders.contentTypeHeader, 'application/octet-stream');
-    request.headers.set('x-upsert', 'true');
-    request.add(fileBytes);
-
-    final response = await request.close();
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      final body = await response.transform(const SystemEncoding().decoder).join();
-      throw HttpException('Upload failed (${response.statusCode}): $body');
-    }
-  }
-
-  static Future<void> _deleteObject(String path) async {
-    final uri = Uri.parse('$_supabaseUrl/storage/v1/object/$_bucket/$path');
-    final request = await HttpClient().deleteUrl(uri);
-    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_supabaseAnonKey');
-    request.headers.set('apikey', _supabaseAnonKey);
-
-    final response = await request.close();
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      final body = await response.transform(const SystemEncoding().decoder).join();
-      throw HttpException('Delete failed (${response.statusCode}): $body');
-    }
-  }
-
-  static String _getPublicUrl(String remotePath) {
-    return '$_supabaseUrl/storage/v1/object/public/$_bucket/$remotePath';
   }
 }

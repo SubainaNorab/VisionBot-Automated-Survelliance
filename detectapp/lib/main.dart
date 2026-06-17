@@ -11,6 +11,7 @@ import 'supabase_service.dart';
 import 'survelliance_controller.dart';
 import 'geojson_map_view.dart';
 import 'custom_app_bar.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,18 +25,28 @@ void main() async {
   try {
     // ✅ Step 1: Get Supabase credentials from dart-define
     debugPrint('1️⃣ Reading Supabase credentials...');
-    final supabaseUrl = dotenv.env['SUPABASE_URL'];
-    final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY'];
+final supabaseUrl = dotenv.env['SUPABASE_URL']!;
+final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY']!;
 
-    if (supabaseUrl == null || supabaseAnonKey == null) {
-      throw Exception(
-        '❌ Missing Supabase credentials!\n'
-        '   Please provide SUPABASE_URL and SUPABASE_ANON_KEY via --dart-define'
-      );
-    }
+// if (supabaseUrl == null || supabaseAnonKey == null) {
+//   throw Exception('Missing SUPABASE credentials in .env file');
+// }
+    await Supabase.initialize(
+  url: supabaseUrl,
+  anonKey: supabaseAnonKey,
+);
+    // final supabaseUrl = dotenv.env['SUPABASE_URL'];
+    // final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY'];
 
-    debugPrint('   ✅ Credentials loaded securely');
-    debugPrint('   URL: ${supabaseUrl.substring(0, 20)}...');
+    // if (supabaseUrl == null || supabaseAnonKey == null) {
+    //   throw Exception(
+    //     '❌ Missing Supabase credentials!\n'
+    //     '   Please provide SUPABASE_URL and SUPABASE_ANON_KEY via --dart-define'
+    //   );
+    // }
+
+    // debugPrint('   ✅ Credentials loaded securely');
+    // debugPrint('   URL: ${supabaseUrl.substring(0, 20)}...');
 
     // ✅ Step 2: Initialize Firebase
     debugPrint('');
