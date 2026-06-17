@@ -3,7 +3,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'model/person.dart';
 import 'firebase_options.dart';
@@ -22,49 +21,41 @@ void main() async {
   debugPrint('');
 
   try {
-    // ✅ Step 1: Load .env file
-    debugPrint('1️⃣ Loading environment variables...');
-    await dotenv.load(fileName: ".env");
-    debugPrint('   ✅ Environment loaded');
-
-    // ✅ Step 2: Get Supabase credentials from .env
-    debugPrint('');
-    debugPrint('2️⃣ Reading Supabase credentials...');
-    
-    final supabaseUrl = dotenv.env['SUPABASE_URL'];
-    final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY'];
+    // ✅ Step 1: Get Supabase credentials from dart-define
+    debugPrint('1️⃣ Reading Supabase credentials...');
+    final supabaseUrl = const String.fromEnvironment('SUPABASE_URL');
+    final supabaseAnonKey = const String.fromEnvironment('SUPABASE_ANON_KEY');
 
     if (supabaseUrl == null || supabaseAnonKey == null) {
       throw Exception(
         '❌ Missing Supabase credentials!\n'
-        '   Please create .env file with SUPABASE_URL and SUPABASE_ANON_KEY\n'
-        '   See .env.example for template'
+        '   Please provide SUPABASE_URL and SUPABASE_ANON_KEY via --dart-define'
       );
     }
 
     debugPrint('   ✅ Credentials loaded securely');
     debugPrint('   URL: ${supabaseUrl.substring(0, 20)}...');
 
-    // ✅ Step 3: Initialize Firebase
+    // ✅ Step 2: Initialize Firebase
     debugPrint('');
-    debugPrint('3️⃣ Initializing Firebase...');
+    debugPrint('2️⃣ Initializing Firebase...');
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
     debugPrint('   ✅ Firebase ready');
 
-    // ✅ Step 4: Initialize Supabase with loaded credentials
+    // ✅ Step 3: Initialize Supabase with loaded credentials
     debugPrint('');
-    debugPrint('4️⃣ Initializing Supabase Storage...');
+    debugPrint('3️⃣ Initializing Supabase Storage...');
     await SupabaseService.initialize(
       supabaseUrl: supabaseUrl,
       supabaseAnonKey: supabaseAnonKey,
     );
     debugPrint('   ✅ Supabase ready');
 
-    // ✅ Step 5: Request Permissions
+    // ✅ Step 4: Request Permissions
     debugPrint('');
-    debugPrint('5️⃣ Requesting permissions...');
+    debugPrint('4️⃣ Requesting permissions...');
     await _requestAllPermissions();
     debugPrint('   ✅ Permissions handled');
 

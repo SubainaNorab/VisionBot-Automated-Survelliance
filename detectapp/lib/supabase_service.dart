@@ -1,12 +1,10 @@
-// lib/services/supabase_service.dart - Fixed with retry logic
-
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SupabaseService {
-  static late final SupabaseClient _client;
-  
+  static late final String _supabaseUrl;
+  static late final String _supabaseAnonKey;
+
   static const String _bucket = 'alert_images';
 
   /// Initialize Supabase
@@ -20,12 +18,8 @@ class SupabaseService {
       debugPrint('🔧 Initializing Supabase Storage');
       debugPrint('═══════════════════════════════════');
       
-      await Supabase.initialize(
-        url: supabaseUrl,
-        anonKey: supabaseAnonKey,
-      );
-      
-      _client = Supabase.instance.client;
+      _supabaseUrl = supabaseUrl.replaceAll(RegExp(r'\/$'), '');
+      _supabaseAnonKey = supabaseAnonKey;
       
       debugPrint('✅ Supabase initialized');
       debugPrint('   URL: ${supabaseUrl.substring(0, 20)}...');
@@ -69,18 +63,9 @@ class SupabaseService {
       
       while (retryCount < maxRetries) {
         try {
-          await _client.storage
-              .from(_bucket)
-              .uploadBinary(
-                remotePath,
-                fileBytes,
-                fileOptions: const FileOptions(
-                  cacheControl: '3600',
-                  upsert: true,  // ✅ Allow overwrite
-                ),
-              );
+          await _uploadBinary(remotePath, fileBytes);
 
-          final publicUrl = _client.storage.from(_bucket).getPublicUrl(remotePath);
+          final publicUrl = _getPublicUrl(remotePath);
 
           debugPrint('✅ Uploaded: $publicUrl');
           
@@ -140,18 +125,9 @@ class SupabaseService {
 
         while (retryCount < maxRetries && !uploaded) {
           try {
-            await _client.storage
-                .from(_bucket)
-                .uploadBinary(
-                  remotePath,
-                  fileBytes,
-                  fileOptions: const FileOptions(
-                    cacheControl: '3600',
-                    upsert: true,
-                  ),
-                );
+            await _uploadBinary(remotePath, fileBytes);
 
-            final publicUrl = _client.storage.from(_bucket).getPublicUrl(remotePath);
+            final publicUrl = _getPublicUrl(remotePath);
             uploadedUrls.add(publicUrl);
             uploaded = true;
             debugPrint('      ✅ Uploaded');
@@ -186,7 +162,7 @@ class SupabaseService {
       
       if (pathSegments.length >= 3) {
         final path = pathSegments.sublist(pathSegments.length - 2).join('/');
-        await _client.storage.from(_bucket).remove([path]);
+        await _deleteObject(path);
         debugPrint('✅ Deleted: $path');
         return true;
       }
@@ -195,5 +171,38 @@ class SupabaseService {
       debugPrint('⚠️ Delete error: $e');
       return false;
     }
+  }
+
+  static Future<void> _uploadBinary(String remotePath, List<int> fileBytes) async {
+    final uri = Uri.parse('$_supabaseUrl/storage/v1/object/$_bucket/$remotePath');
+    final request = await HttpClient().putUrl(uri);
+    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_supabaseAnonKey');
+    request.headers.set('apikey', _supabaseAnonKey);
+    request.headers.set(HttpHeaders.contentTypeHeader, 'application/octet-stream');
+    request.headers.set('x-upsert', 'true');
+    request.add(fileBytes);
+
+    final response = await request.close();
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final body = await response.transform(const SystemEncoding().decoder).join();
+      throw HttpException('Upload failed (${response.statusCode}): $body');
+    }
+  }
+
+  static Future<void> _deleteObject(String path) async {
+    final uri = Uri.parse('$_supabaseUrl/storage/v1/object/$_bucket/$path');
+    final request = await HttpClient().deleteUrl(uri);
+    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $_supabaseAnonKey');
+    request.headers.set('apikey', _supabaseAnonKey);
+
+    final response = await request.close();
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final body = await response.transform(const SystemEncoding().decoder).join();
+      throw HttpException('Delete failed (${response.statusCode}): $body');
+    }
+  }
+
+  static String _getPublicUrl(String remotePath) {
+    return '$_supabaseUrl/storage/v1/object/public/$_bucket/$remotePath';
   }
 }
