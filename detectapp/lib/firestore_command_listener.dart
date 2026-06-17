@@ -39,18 +39,33 @@ class FirestoreCommandListener {
         .collection('ble_commands')
         .where('executed', isEqualTo: false)
         // REMOVE: .orderBy('sent_at', descending: false)
-        // Composite index not needed now
         .snapshots()
         .listen((snapshot) async {
       for (final change in snapshot.docChanges) {
         if (change.type == DocumentChangeType.added) {
-          final data = change.doc.data()!;
-          final cmd = data['command'] as String?;
+          try {
+            final data = change.doc.data();
 
-          if (cmd != null && ['F', 'L', 'R', 'S', 'E'].contains(cmd)) {
-            debugPrint('[Firestore] Received command: $cmd');
-            await _ble.sendCommand(cmd);
-            await change.doc.reference.update({'executed': true});
+            // ✅ FIX 1: prevent null crash
+            if (data == null) continue;
+
+            final cmd = data['command'] as String?;
+
+            if (cmd != null && ['F', 'L', 'R', 'S', 'E'].contains(cmd)) {
+              debugPrint('[Firestore] Received command: $cmd');
+
+              // BLE send
+              await _ble.sendCommand(cmd);
+
+              // ✅ FIX 2: safe Firestore update
+              try {
+                await change.doc.reference.update({'executed': true});
+              } catch (e) {
+                debugPrint('[Firestore] Failed to mark executed: $e');
+              }
+            }
+          } catch (e) {
+            debugPrint('[Firestore] Command processing error: $e');
           }
         }
       }
