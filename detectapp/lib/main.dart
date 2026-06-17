@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'model/person.dart';
@@ -13,7 +14,7 @@ import 'custom_app_bar.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+  await dotenv.load(fileName: ".env");
   debugPrint('');
   debugPrint('╔═══════════════════════════════════╗');
   debugPrint('║  VisionBot - Loading Credentials   ║');
@@ -23,8 +24,8 @@ void main() async {
   try {
     // ✅ Step 1: Get Supabase credentials from dart-define
     debugPrint('1️⃣ Reading Supabase credentials...');
-    final supabaseUrl = const String.fromEnvironment('SUPABASE_URL');
-    final supabaseAnonKey = const String.fromEnvironment('SUPABASE_ANON_KEY');
+    final supabaseUrl = dotenv.env['SUPABASE_URL'];
+    final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY'];
 
     if (supabaseUrl == null || supabaseAnonKey == null) {
       throw Exception(

@@ -50,17 +50,18 @@ class CameraService {
       );
 
       await _controller!.initialize();
-      
+
       try {
         await _controller!.setExposureMode(ExposureMode.auto);
         await _controller!.setFocusMode(FocusMode.auto);
-        
+
         final maxExposure = await _controller!.getMaxExposureOffset();
         if (maxExposure > 0) {
           await _controller!.setExposureOffset(maxExposure * 0.3);
-          debugPrint('📸 Camera: Exposure boosted (+${(maxExposure * 0.3).toStringAsFixed(2)})');
+          debugPrint(
+              '📸 Camera: Exposure boosted (+${(maxExposure * 0.3).toStringAsFixed(2)})');
         }
-        
+
         debugPrint('✅ Camera optimized: high resolution + auto exposure');
       } catch (e) {
         debugPrint('⚠️ Camera settings failed: $e (continuing)');
@@ -91,20 +92,16 @@ class CameraService {
   Future<XFile> takePicture() async {
     try {
       final c = _controller;
-      if (c == null) {
-        throw Exception('Controller is null');
-      }
-      
-      if (!c.value.isInitialized) {
+
+      if (c == null || !c.value.isInitialized) {
         throw Exception('Camera not initialized');
       }
-      
-      // ✅ Wait for capture session to be ready
+
       if (c.value.isTakingPicture) {
         debugPrint('⚠️ Camera busy, waiting...');
         await Future.delayed(const Duration(milliseconds: 100));
       }
-      
+
       if (!c.value.isInitialized) {
         throw Exception('Camera not initialized after delay');
       }
@@ -120,9 +117,11 @@ class CameraService {
   Future<void> startStream(void Function(CameraImage image) onFrame) async {
     try {
       final c = _controller;
+
       if (c == null || !c.value.isInitialized) {
         throw Exception('Camera not initialized');
       }
+
       if (c.value.isStreamingImages) {
         debugPrint('⚠️ Stream already running');
         return;
@@ -136,21 +135,31 @@ class CameraService {
     }
   }
 
-  // ✅ FIXED: Safe stream stop
+  // ✅ FIXED: Safe stream stop (IMPORTANT FIXES HERE)
   Future<void> stopStream() async {
     try {
       final c = _controller;
+
       if (c == null) {
         debugPrint('⚠️ Controller null when stopping stream');
         return;
       }
-      
+
+      // 🔥 FIX 1: extra safety check
+      if (!c.value.isInitialized) return;
+
       if (!c.value.isStreamingImages) {
         debugPrint('⚠️ Stream not running');
         return;
       }
-      
-      await c.stopImageStream();
+
+      // 🔥 FIX 2: prevent native crash
+      try {
+        await c.stopImageStream();
+      } catch (e) {
+        debugPrint('⚠️ stopImageStream safe ignore: $e');
+      }
+
       debugPrint('✅ Image stream stopped');
     } catch (e) {
       debugPrint('⚠️ Stop stream error: $e (continuing)');
@@ -159,22 +168,27 @@ class CameraService {
 
   Widget buildPreview() {
     final c = _controller;
+
     if (c == null || !c.value.isInitialized) {
       return const Center(child: CircularProgressIndicator());
     }
+
     return CameraPreview(c);
   }
 
-  // ✅ FIXED: Safe disposal
+  // ✅ FIXED: Safe disposal (IMPORTANT RACE FIX)
   Future<void> dispose() async {
     if (_isDisposed) {
       debugPrint('⚠️ Already disposed');
       return;
     }
-    
+
     _isDisposed = true;
 
     try {
+      // 🔥 FIX: small delay avoids race with frame callback
+      await Future.delayed(const Duration(milliseconds: 50));
+
       await stopStream();
     } catch (e) {
       debugPrint('⚠️ Stop stream during dispose: $e');
