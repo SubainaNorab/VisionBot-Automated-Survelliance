@@ -731,4 +731,33 @@ class SurveillanceController {
     debugPrint('═══════════════════════════════════');
     debugPrint('');
   }
+  // Add to survelliance_controller.dart if missing:
+
+Future<void> pauseForMapTab() async {
+  _stopVerificationLoop();
+  try {
+    if (_camera.controller?.value.isStreamingImages ?? false) {
+      await _camera.stopStream();
+    }
+  } catch (e) {
+    debugPrint('⚠️ pauseForMapTab stopStream: $e');
+  }
+  await Future.delayed(const Duration(milliseconds: 280));
+  debugPrint('⏸️ Surveillance paused for map');
+}
+
+Future<void> resumeFromMapTab() async {
+  try {
+    if (_camera.isInitialized &&
+        !(_camera.controller?.value.isStreamingImages ?? false)) {
+      await _camera.startStream(_onFrame);
+    }
+  } catch (e) {
+    debugPrint('⚠️ resumeFromMapTab startStream: $e');
+  }
+  if (_autoVerify && mounted) {
+    _startVerificationLoop();
+  }
+  debugPrint('▶️ Surveillance resumed');
+}
 }

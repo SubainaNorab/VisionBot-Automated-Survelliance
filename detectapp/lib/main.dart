@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:permission_handler/permission_handler.dart';
-
+import 'model/person.dart';
 import 'firebase_options.dart';
 import 'supabase_service.dart';
 import 'survelliance_controller.dart';
