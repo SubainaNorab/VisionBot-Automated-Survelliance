@@ -1,6 +1,7 @@
-// main.dart - Hybrid Detection System with Complete Optimizations
+// main.dart - MERGED: Hybrid detection + Path navigation
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -8,6 +9,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'firebase_options.dart';
 import 'supabase_service.dart';
 import 'survelliance_controller.dart';
+import 'geojson_map_view.dart';
+import 'custom_app_bar.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -68,14 +71,14 @@ void main() async {
     debugPrint('');
     debugPrint('╔═══════════════════════════════════╗');
     debugPrint('║   App Ready - Starting VisionBot   ║');
-    debugPrint('║      HYBRID DETECTION MODE 🚀      ║');
+    debugPrint('║    HYBRID MODE + PATH FOLLOW 🚀    ║');
     debugPrint('╚═══════════════════════════════════╝');
     debugPrint('');
 
     runApp(const VisionBot());
   } catch (e, st) {
     debugPrint('');
-    debugPrint('╔��══════════════════════════════════╗');
+    debugPrint('╔═══════════════════════════════════╗');
     debugPrint('║  ❌ STARTUP FAILED                 ║');
     debugPrint('╚═══════════════════════════════════╝');
     debugPrint('');
@@ -94,6 +97,13 @@ Future<void> _requestAllPermissions() async {
       Permission.photos,
       Permission.location,
     ].request();
+    
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+      ].request();
+    }
     
     debugPrint('📋 Permission Results:');
     statuses.forEach((permission, status) {
@@ -131,47 +141,75 @@ class SurveillanceScreen extends StatefulWidget {
   State<SurveillanceScreen> createState() => _SurveillanceScreenState();
 }
 
-class _SurveillanceScreenState extends State<SurveillanceScreen> 
-    with WidgetsBindingObserver {
+class _SurveillanceScreenState extends State<SurveillanceScreen>
+    with WidgetsBindingObserver, TickerProviderStateMixin {
   late final SurveillanceController _controller;
-  
-  // ✅ Optimization: Cache last state to avoid unnecessary rebuilds
-  late SurveillanceState _lastState;
+  late final TabController _tabController;
+
+  bool _mapContentReady = false;
 
   @override
   void initState() {
     super.initState();
-    
+
     WidgetsBinding.instance.addObserver(this);
-    
+
+    // ✅ TWO TABS: Surveillance + Location
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(_onMainTabChanged);
+
     _controller = SurveillanceController(groupThreshold: 1);
-    _lastState = _controller.currentState;
-    
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _controller.initialize();
-      }
+      _controller.initialize();
     });
+  }
+
+  void _onMainTabChanged() {
+    if (_tabController.indexIsChanging) return;
+    
+    if (_tabController.index == 1) {
+      // ✅ Switching to MAP TAB
+      _prepareMapTab();
+    } else {
+      // ✅ Switching to SURVEILLANCE TAB
+      _prepareSurveillanceTab();
+    }
+  }
+
+  Future<void> _prepareMapTab() async {
+    if (!mounted) return;
+    setState(() => _mapContentReady = false);
+    
+    // ✅ Pause surveillance before mounting map
+    await _controller.pauseForMapTab();
+    
+    if (!mounted || _tabController.index != 1) return;
+    setState(() => _mapContentReady = true);
+  }
+
+  Future<void> _prepareSurveillanceTab() async {
+    if (!mounted) return;
+    setState(() => _mapContentReady = false);
+    
+    // ✅ Resume surveillance after leaving map
+    await _controller.resumeFromMapTab();
+    
+    if (!mounted || _tabController.index != 0) return;
+    setState(() {});
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     debugPrint('📱 App lifecycle: $state');
-    
-    // ✅ Optimization: Pause camera on app suspend
-    if (state == AppLifecycleState.paused) {
-      _controller.setAutoVerify(false);
-      debugPrint('⏸️ Auto-verify paused');
-    } else if (state == AppLifecycleState.resumed) {
-      _controller.setAutoVerify(true);
-      debugPrint('▶️ Auto-verify resumed');
-    }
   }
 
   @override
   void dispose() {
+    _tabController.removeListener(_onMainTabChanged);
     WidgetsBinding.instance.removeObserver(this);
+    _tabController.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -181,115 +219,76 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
     return StreamBuilder<SurveillanceState>(
       stream: _controller.stateStream,
       initialData: _controller.currentState,
-      // ✅ Optimization: Use buildWhen to avoid rebuilds
       builder: (context, snapshot) {
         final state = snapshot.data ?? _controller.currentState;
-        _lastState = state;
 
         return Scaffold(
           backgroundColor: Colors.black,
-          appBar: AppBar(
-            title: const Text(
-              'VisionBot Surveillance',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            backgroundColor: Colors.black87,
-            toolbarHeight: 48,
-            elevation: 0,
-            actions: [
-              IconButton(
-                onPressed: () => _showDetectionSettings(context),
-                icon: const Icon(Icons.settings, size: 20),
-                tooltip: 'Detection Settings',
-                padding: const EdgeInsets.all(8),
-              ),
-              IconButton(
-                onPressed: _controller.switchCamera,
-                icon: const Icon(Icons.cameraswitch, size: 20),
-                tooltip: 'Switch Camera',
-                padding: const EdgeInsets.all(8),
-              ),
-              IconButton(
-                onPressed: state.processingFace ? null : _controller.verifyFace,
-                icon: const Icon(Icons.face, size: 20),
-                tooltip: 'Verify Face Now',
-                padding: const EdgeInsets.all(8),
-              ),
-            ],
+          appBar: VisionBotAppBar(
+            tabController: _tabController,
+            onSettingsPressed: () => _showDetectionSettings(context),
+            onSwitchCameraPressed: _controller.switchCamera,
+            onVerifyFacePressed: _controller.verifyFace,
+            isProcessingFace: state.processingFace,
           ),
-          body: Column(
-            children: [
-              // ✅ Camera Preview with optimized stack
-              Expanded(
-                child: Stack(
+          // ✅ AnimatedBuilder: Switch between surveillance + map
+          body: AnimatedBuilder(
+            animation: _tabController,
+            builder: (context, _) {
+              final onLocation = _tabController.index == 1;
+              
+              if (!onLocation) {
+                // ✅ SURVEILLANCE TAB
+                return Column(
                   children: [
-                    // Camera feed
-                    Positioned.fill(
-                      child: _controller.camera.buildPreview(),
-                    ),
-                    
-                    // ✅ Loading indicator
-                    if (state.isBooting)
-                      const Positioned.fill(
-                        child: Center(
-                          child: CircularProgressIndicator(),
-                        ),
+                    Expanded(
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: _controller.camera.buildPreview(),
+                          ),
+                          if (state.isBooting)
+                            const Positioned.fill(
+                              child: Center(child: CircularProgressIndicator()),
+                            ),
+                          Positioned(top: 8, right: 8, child: _LiveIndicator()),
+                          Positioned(
+                            top: 8,
+                            left: 8,
+                            child: _buildAutoVerifyStatus(),
+                          ),
+                        ],
                       ),
-                    
-                    // ✅ Live indicator (top right)
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: _buildLiveIndicator(),
                     ),
-                    
-                    // ✅ Auto-verify status (top left)
-                    Positioned(
-                      top: 8,
-                      left: 8,
-                      child: _buildAutoVerifyStatus(),
-                    ),
+                    _buildStatusPanel(state),
                   ],
-                ),
-              ),
-
-              // ✅ Optimized status panel
-              _buildStatusPanel(state),
-            ],
+                );
+              }
+              
+              // ✅ LOCATION/MAP TAB
+              if (!_mapContentReady) {
+                return const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 16),
+                      Text(
+                        'Preparing map…',
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ],
+                  ),
+                );
+              }
+              return const GeoJSONMapView();
+            },
           ),
         );
       },
     );
   }
 
-  // ✅ Extracted widget for live indicator
-  Widget _buildLiveIndicator() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: Colors.black87,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.red.withOpacity(0.5), width: 1),
-      ),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.fiber_manual_record, color: Colors.red, size: 10),
-          SizedBox(width: 4),
-          Text(
-            'LIVE',
-            style: TextStyle(
-              color: Colors.greenAccent,
-              fontWeight: FontWeight.bold,
-              fontSize: 11,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ✅ Extracted widget for auto-verify status
   Widget _buildAutoVerifyStatus() {
     final isOn = _controller.autoVerify;
     return Container(
@@ -324,7 +323,6 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
     );
   }
 
-  // ✅ Extracted widget for status panel
   Widget _buildStatusPanel(SurveillanceState state) {
     return Container(
       color: Colors.black87,
@@ -333,10 +331,10 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // ✅ Face verification status
+          // Face status
           Row(
             children: [
-              Icon(Icons.face, color: Colors.blueAccent, size: 14),
+              const Icon(Icons.face, color: Colors.blueAccent, size: 14),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -364,7 +362,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
           ),
           const SizedBox(height: 8),
 
-          // ✅ Auto verify toggle + Manual verify button
+          // Auto verify toggle + Manual verify button
           Row(
             children: [
               _buildAutoVerifyToggle(),
@@ -377,7 +375,6 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
     );
   }
 
-  // ✅ Extracted auto-verify toggle
   Widget _buildAutoVerifyToggle() {
     final isOn = _controller.autoVerify;
     return Container(
@@ -415,7 +412,6 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
     );
   }
 
-  // ✅ Extracted verify button
   Widget _buildVerifyButton(SurveillanceState state) {
     return SizedBox(
       height: 36,
@@ -449,8 +445,6 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
               ),
               const SizedBox(height: 16),
-              
-              // ✅ Close Range
               ListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 title: const Text('Close Range (1-2m)', style: TextStyle(fontSize: 14)),
@@ -467,8 +461,6 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                   _showSnackbar('✅ Close range (1-2m)');
                 },
               ),
-              
-              // ✅ Medium Range (Recommended)
               Container(
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.green, width: 2),
@@ -497,10 +489,6 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                   },
                 ),
               ),
-              
-              const SizedBox(height: 8),
-              
-              // ✅ Long Range
               ListTile(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 title: const Text('Long Range (3-6m)', style: TextStyle(fontSize: 14)),
@@ -544,7 +532,35 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
   }
 }
 
-// ✅ HYBRID Detection Display Widget
+class _LiveIndicator extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black87,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.red.withOpacity(0.5), width: 1),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.fiber_manual_record, color: Colors.red, size: 10),
+          SizedBox(width: 4),
+          Text(
+            'LIVE',
+            style: TextStyle(
+              color: Colors.greenAccent,
+              fontWeight: FontWeight.bold,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _HybridDetectionDisplay extends StatelessWidget {
   final int yoloPeopleCount;
   final int verifiedPeopleCount;
@@ -578,7 +594,6 @@ class _HybridDetectionDisplay extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          // ✅ HYBRID: Show both YOLO and verified counts
           Row(
             children: [
               Icon(Icons.people, color: Colors.orangeAccent, size: 18),
@@ -609,11 +624,8 @@ class _HybridDetectionDisplay extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          
-          // ✅ Group + Smoke status
           Row(
             children: [
-              // Group detection: YOLO + FACE
               Expanded(
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -650,10 +662,7 @@ class _HybridDetectionDisplay extends StatelessWidget {
                   ),
                 ),
               ),
-              
               const SizedBox(width: 8),
-              
-              // Smoking detection
               Expanded(
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -679,7 +688,8 @@ class _HybridDetectionDisplay extends StatelessWidget {
                         child: Text(
                           smokingDetected ? 'Smoke: YES' : 'Smoke: NO',
                           style: TextStyle(
-                            color: smokingDetected ? Colors.redAccent : Colors.grey,
+                            color:
+                                smokingDetected ? Colors.redAccent : Colors.grey,
                             fontWeight: FontWeight.bold,
                             fontSize: 11,
                           ),
