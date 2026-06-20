@@ -46,27 +46,33 @@ class FirestoreCommandListener {
       for (final change in snapshot.docChanges) {
         if (change.type == DocumentChangeType.added ||
             change.type == DocumentChangeType.modified) {
-          final data = change.doc.data()!;
-          final cmd = data['command'] as String?;
+          try {
+            final data = change.doc.data();
+            if (data == null) continue;
 
-          if (cmd != null && ['F', 'L', 'R', 'S', 'E'].contains(cmd)) {
-            debugPrint('[Firestore] Received command: $cmd');
-            if (_ble.isConnected) {
-              try {
-                await _ble.sendCommand(cmd);
-              } catch (e) {
-                debugPrint('[Firestore] BLE send error: $e');
+            final cmd = data['command'] as String?;
+
+            if (cmd != null && ['F', 'L', 'R', 'S', 'E'].contains(cmd)) {
+              debugPrint('[Firestore] Received command: $cmd');
+
+              if (_ble.isConnected) {
+                try {
+                  await _ble.sendCommand(cmd);
+                } catch (e) {
+                  debugPrint('[Firestore] BLE send error: $e');
+                }
+              } else {
+                debugPrint('[Firestore] BLE not connected, skipping cmd: $cmd');
               }
-            } else {
-              debugPrint('[Firestore] BLE not connected, skipping cmd: $cmd');
-            }
 
-            // Mark executed regardless to avoid replay loops when BLE is unavailable
-            try {
-              await change.doc.reference.update({'executed': true});
-            } catch (e) {
-              debugPrint('[Firestore] Failed to mark command executed: $e');
+              try {
+                await change.doc.reference.update({'executed': true});
+              } catch (e) {
+                debugPrint('[Firestore] Failed to mark executed: $e');
+              }
             }
+          } catch (e) {
+            debugPrint('[Firestore] Command processing error: $e');
           }
         }
       }
