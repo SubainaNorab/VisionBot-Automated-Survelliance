@@ -89,8 +89,7 @@ class SurveillanceController {
   bool _processingVerification = false;
 
   final Map<String, DateTime> _recentlyVerified = {};
-  const Duration _verificationCacheDuration = Duration(seconds: 30);
-
+final Duration _verificationCacheDuration = Duration(seconds: 30);
   // ✅ Hybrid tracking
   final int _lastYoloPeopleCount = 0;
   int _lastVerifiedPeopleCount = 0;
