@@ -5,13 +5,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'model/person.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'firebase_options.dart';
 import 'supabase_service.dart';
 import 'survelliance_controller.dart';
 import 'geojson_map_view.dart';
 import 'custom_app_bar.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -23,49 +22,31 @@ void main() async {
   debugPrint('');
 
   try {
-    // ✅ Step 1: Get Supabase credentials from dart-define
     debugPrint('1️⃣ Reading Supabase credentials...');
-final supabaseUrl = dotenv.env['SUPABASE_URL']!;
-final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY']!;
+    final supabaseUrl = dotenv.env['SUPABASE_URL']!;
+    final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY']!;
 
-// if (supabaseUrl == null || supabaseAnonKey == null) {
-//   throw Exception('Missing SUPABASE credentials in .env file');
-// }
-    await Supabase.initialize(
-  url: supabaseUrl,
-  anonKey: supabaseAnonKey,
-);
-    // final supabaseUrl = dotenv.env['SUPABASE_URL'];
-    // final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY'];
-
-    // if (supabaseUrl == null || supabaseAnonKey == null) {
-    //   throw Exception(
-    //     '❌ Missing Supabase credentials!\n'
-    //     '   Please provide SUPABASE_URL and SUPABASE_ANON_KEY via --dart-define'
-    //   );
-    // }
-
-    // debugPrint('   ✅ Credentials loaded securely');
-    // debugPrint('   URL: ${supabaseUrl.substring(0, 20)}...');
-
-    // ✅ Step 2: Initialize Firebase
     debugPrint('');
     debugPrint('2️⃣ Initializing Firebase...');
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-    debugPrint('   ✅ Firebase ready');
+    await Future.wait([
+      Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      ),
+      Supabase.initialize(
+        url: supabaseUrl,
+        anonKey: supabaseAnonKey,
+      ),
+    ]);
+    debugPrint('   ✅ Firebase & Supabase ready');
 
-    // ✅ Step 3: Initialize Supabase with loaded credentials
     debugPrint('');
     debugPrint('3️⃣ Initializing Supabase Storage...');
     await SupabaseService.initialize(
       supabaseUrl: supabaseUrl,
       supabaseAnonKey: supabaseAnonKey,
     );
-    debugPrint('   ✅ Supabase ready');
+    debugPrint('   ✅ Supabase Storage ready');
 
-    // ✅ Step 4: Request Permissions
     debugPrint('');
     debugPrint('4️⃣ Requesting permissions...');
     await _requestAllPermissions();
@@ -100,20 +81,19 @@ Future<void> _requestAllPermissions() async {
       Permission.photos,
       Permission.location,
     ].request();
-    
+
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       await [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
       ].request();
     }
-    
+
     debugPrint('📋 Permission Results:');
     statuses.forEach((permission, status) {
       final emoji = status.isGranted ? '✅' : '⚠️';
       debugPrint('   $emoji ${permission.toString().split('.').last}: $status');
     });
-    
   } catch (e) {
     debugPrint('❌ Permission request failed: $e');
   }
@@ -127,14 +107,16 @@ class VisionBot extends StatelessWidget {
     return MaterialApp(
       title: 'VisionBot Surveillance',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        colorSchemeSeed: Colors.orange,
-      ),
+      theme: _buildTheme(),
       home: const SurveillanceScreen(),
     );
   }
+
+  static ThemeData _buildTheme() => ThemeData(
+        useMaterial3: true,
+        brightness: Brightness.dark,
+        colorSchemeSeed: Colors.orange,
+      );
 }
 
 class SurveillanceScreen extends StatefulWidget {
@@ -170,7 +152,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
 
   void _onMainTabChanged() {
     if (_tabController.indexIsChanging) return;
-    
+
     if (_tabController.index == 1) {
       // ✅ Switching to MAP TAB
       _prepareMapTab();
@@ -183,10 +165,10 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
   Future<void> _prepareMapTab() async {
     if (!mounted) return;
     setState(() => _mapContentReady = false);
-    
+
     // ✅ Pause surveillance before mounting map
     await _controller.pauseForMapTab();
-    
+
     if (!mounted || _tabController.index != 1) return;
     setState(() => _mapContentReady = true);
   }
@@ -194,10 +176,10 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
   Future<void> _prepareSurveillanceTab() async {
     if (!mounted) return;
     setState(() => _mapContentReady = false);
-    
+
     // ✅ Resume surveillance after leaving map
     await _controller.resumeFromMapTab();
-    
+
     if (!mounted || _tabController.index != 0) return;
     setState(() {});
   }
@@ -239,7 +221,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
             animation: _tabController,
             builder: (context, _) {
               final onLocation = _tabController.index == 1;
-              
+
               if (!onLocation) {
                 // ✅ SURVEILLANCE TAB
                 return Column(
@@ -267,7 +249,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                   ],
                 );
               }
-              
+
               // ✅ LOCATION/MAP TAB
               if (!_mapContentReady) {
                 return const Center(
@@ -295,30 +277,40 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
   Widget _buildAutoVerifyStatus() {
     final isOn = _controller.autoVerify;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.black87,
-        borderRadius: BorderRadius.circular(8),
+        color: isOn
+            ? Colors.green.withOpacity(0.15)
+            : Colors.grey.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isOn ? Colors.green : Colors.grey,
-          width: 2,
+          color: isOn ? Colors.green : Colors.grey.shade600,
+          width: 1.5,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: (isOn ? Colors.green : Colors.grey).withOpacity(0.2),
+            blurRadius: 4,
+            spreadRadius: 0,
+          ),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
             isOn ? Icons.check_circle : Icons.cancel,
-            color: isOn ? Colors.green : Colors.grey,
-            size: 16,
+            color: isOn ? Colors.greenAccent : Colors.grey.shade500,
+            size: 14,
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 6),
           Text(
             'Auto: ${isOn ? "ON" : "OFF"}',
             style: TextStyle(
-              color: isOn ? Colors.green : Colors.grey,
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
+              color: isOn ? Colors.greenAccent : Colors.grey.shade400,
+              fontWeight: FontWeight.w600,
+              fontSize: 11,
+              letterSpacing: 0.3,
             ),
           ),
         ],
@@ -328,8 +320,30 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
 
   Widget _buildStatusPanel(SurveillanceState state) {
     return Container(
-      color: Colors.black87,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.black.withOpacity(0.95),
+            Colors.black.withOpacity(0.88),
+          ],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+        border: Border(
+          top: BorderSide(
+            color: Colors.orange.shade700.withOpacity(0.3),
+            width: 1,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.4),
+            blurRadius: 8,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -337,14 +351,23 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
           // Face status
           Row(
             children: [
-              const Icon(Icons.face, color: Colors.blueAccent, size: 14),
-              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child:
+                    const Icon(Icons.face, color: Colors.blueAccent, size: 13),
+              ),
+              const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   state.faceStatus,
                   style: const TextStyle(
                     color: Colors.blueAccent,
-                    fontSize: 11,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -352,7 +375,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
 
           // ✅ HYBRID Detection Display
           _HybridDetectionDisplay(
@@ -363,7 +386,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
             groupDetected: state.groupDetected,
             smokingDetected: state.smokingDetected,
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
 
           // Auto verify toggle + Manual verify button
           Row(
@@ -381,33 +404,45 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
   Widget _buildAutoVerifyToggle() {
     final isOn = _controller.autoVerify;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: isOn
-            ? Colors.green.withOpacity(0.2)
-            : Colors.grey.withOpacity(0.2),
-        borderRadius: BorderRadius.circular(8),
+            ? Colors.green.withOpacity(0.12)
+            : Colors.grey.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isOn ? Colors.green : Colors.grey,
-          width: 2,
+          color: isOn ? Colors.green.shade400 : Colors.grey.shade700,
+          width: 1.2,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: (isOn ? Colors.green : Colors.grey).withOpacity(0.15),
+            blurRadius: 3,
+            spreadRadius: 0,
+          ),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Switch(
-            value: isOn,
-            onChanged: _controller.setAutoVerify,
-            activeColor: Colors.green,
-            materialTapTargetSize: MaterialTapTargetSize.padded,
+          Transform.scale(
+            scale: 0.8,
+            child: Switch(
+              value: isOn,
+              onChanged: _controller.setAutoVerify,
+              activeThumbColor: Colors.greenAccent,
+              inactiveThumbColor: Colors.grey.shade600,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 4),
           Text(
             'Auto Verify',
             style: TextStyle(
-              color: isOn ? Colors.green : Colors.grey,
-              fontWeight: FontWeight.bold,
-              fontSize: 12,
+              color: isOn ? Colors.green.shade300 : Colors.grey.shade400,
+              fontWeight: FontWeight.w600,
+              fontSize: 11,
+              letterSpacing: 0.3,
             ),
           ),
         ],
@@ -417,17 +452,22 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
 
   Widget _buildVerifyButton(SurveillanceState state) {
     return SizedBox(
-      height: 36,
+      height: 38,
       child: ElevatedButton.icon(
         onPressed: state.processingFace ? null : _controller.verifyFace,
-        icon: const Icon(Icons.face, size: 14),
+        icon: const Icon(Icons.face, size: 16),
         label: Text(
           state.processingFace ? 'Processing...' : 'Verify',
-          style: const TextStyle(fontSize: 11),
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
         ),
         style: ElevatedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          visualDensity: VisualDensity.comfortable,
+          backgroundColor: Colors.orange.shade600,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          elevation: 2,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
         ),
       ),
     );
@@ -449,10 +489,14 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
               ),
               const SizedBox(height: 16),
               ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                title: const Text('Close Range (1-2m)', style: TextStyle(fontSize: 14)),
-                subtitle: const Text('Face: 100-400px', style: TextStyle(fontSize: 11)),
-                leading: const Icon(Icons.person, color: Colors.orange, size: 20),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                title: const Text('Close Range (1-2m)',
+                    style: TextStyle(fontSize: 14)),
+                subtitle: const Text('Face: 100-400px',
+                    style: TextStyle(fontSize: 11)),
+                leading:
+                    const Icon(Icons.person, color: Colors.orange, size: 20),
                 onTap: () {
                   _controller.setDistanceThresholds(
                     minWidth: 100,
@@ -470,7 +514,8 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   title: const Text(
                     'Medium Range (2-4m)',
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
@@ -479,7 +524,8 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                     'Face: 50-500px | RECOMMENDED',
                     style: TextStyle(fontSize: 11, color: Colors.green),
                   ),
-                  leading: const Icon(Icons.groups, color: Colors.green, size: 20),
+                  leading:
+                      const Icon(Icons.groups, color: Colors.green, size: 20),
                   onTap: () {
                     _controller.setDistanceThresholds(
                       minWidth: 50,
@@ -493,10 +539,14 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                 ),
               ),
               ListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                title: const Text('Long Range (3-6m)', style: TextStyle(fontSize: 14)),
-                subtitle: const Text('Face: 30-600px', style: TextStyle(fontSize: 11)),
-                leading: const Icon(Icons.visibility, color: Colors.blue, size: 20),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                title: const Text('Long Range (3-6m)',
+                    style: TextStyle(fontSize: 14)),
+                subtitle: const Text('Face: 30-600px',
+                    style: TextStyle(fontSize: 11)),
+                leading:
+                    const Icon(Icons.visibility, color: Colors.blue, size: 20),
                 onTap: () {
                   _controller.setDistanceThresholds(
                     minWidth: 30,
@@ -536,26 +586,39 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
 }
 
 class _LiveIndicator extends StatelessWidget {
+  const _LiveIndicator();
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: Colors.black87,
+        color: Colors.red.withOpacity(0.15),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.red.withOpacity(0.5), width: 1),
+        border: Border.all(
+          color: Colors.red.withOpacity(0.5),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.red.withOpacity(0.2),
+            blurRadius: 4,
+            spreadRadius: 0,
+          ),
+        ],
       ),
       child: const Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.fiber_manual_record, color: Colors.red, size: 10),
-          SizedBox(width: 4),
+          Icon(Icons.fiber_manual_record, color: Colors.redAccent, size: 8),
+          SizedBox(width: 5),
           Text(
             'LIVE',
             style: TextStyle(
-              color: Colors.greenAccent,
-              fontWeight: FontWeight.bold,
+              color: Colors.redAccent,
+              fontWeight: FontWeight.w700,
               fontSize: 11,
+              letterSpacing: 0.5,
             ),
           ),
         ],
@@ -584,14 +647,21 @@ class _HybridDetectionDisplay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.black54,
-        borderRadius: BorderRadius.circular(8),
+        color: Colors.black.withOpacity(0.4),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: Colors.orangeAccent.withOpacity(0.5),
-          width: 2,
+          color: Colors.orange.withOpacity(0.4),
+          width: 1.2,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.orange.withOpacity(0.1),
+            blurRadius: 4,
+            spreadRadius: 0,
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -599,7 +669,15 @@ class _HybridDetectionDisplay extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.people, color: Colors.orangeAccent, size: 18),
+              Container(
+                padding: const EdgeInsets.all(4),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Icon(Icons.people,
+                    color: Colors.orangeAccent, size: 15),
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Column(
@@ -609,8 +687,8 @@ class _HybridDetectionDisplay extends StatelessWidget {
                       'YOLO: $yoloPeopleCount | Verified: $verifiedPeopleCount',
                       style: const TextStyle(
                         color: Colors.orangeAccent,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12,
                       ),
                     ),
                     if (verifiedPeopleCount > 0)
@@ -619,6 +697,7 @@ class _HybridDetectionDisplay extends StatelessWidget {
                         style: const TextStyle(
                           color: Colors.orange,
                           fontSize: 10,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                   ],
@@ -626,19 +705,22 @@ class _HybridDetectionDisplay extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           Row(
             children: [
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                   decoration: BoxDecoration(
                     color: groupDetected
-                        ? Colors.red.withOpacity(0.2)
-                        : Colors.grey.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(6),
+                        ? Colors.red.withOpacity(0.15)
+                        : Colors.grey.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(8),
                     border: Border.all(
-                      color: groupDetected ? Colors.redAccent : Colors.grey,
+                      color: groupDetected
+                          ? Colors.red.withOpacity(0.5)
+                          : Colors.grey.withOpacity(0.3),
                       width: 1,
                     ),
                   ),
@@ -646,16 +728,20 @@ class _HybridDetectionDisplay extends StatelessWidget {
                     children: [
                       Icon(
                         Icons.groups,
-                        color: groupDetected ? Colors.redAccent : Colors.grey,
-                        size: 16,
+                        color: groupDetected
+                            ? Colors.redAccent
+                            : Colors.grey.shade600,
+                        size: 15,
                       ),
-                      const SizedBox(width: 4),
+                      const SizedBox(width: 5),
                       Expanded(
                         child: Text(
                           groupDetected ? 'Group: YES' : 'Group: NO',
                           style: TextStyle(
-                            color: groupDetected ? Colors.redAccent : Colors.grey,
-                            fontWeight: FontWeight.bold,
+                            color: groupDetected
+                                ? Colors.redAccent
+                                : Colors.grey.shade500,
+                            fontWeight: FontWeight.w600,
                             fontSize: 11,
                           ),
                           overflow: TextOverflow.ellipsis,
@@ -668,14 +754,17 @@ class _HybridDetectionDisplay extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                   decoration: BoxDecoration(
                     color: smokingDetected
-                        ? Colors.red.withOpacity(0.2)
-                        : Colors.grey.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(6),
+                        ? Colors.red.withOpacity(0.15)
+                        : Colors.grey.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(8),
                     border: Border.all(
-                      color: smokingDetected ? Colors.redAccent : Colors.grey,
+                      color: smokingDetected
+                          ? Colors.red.withOpacity(0.5)
+                          : Colors.grey.withOpacity(0.3),
                       width: 1,
                     ),
                   ),
@@ -683,17 +772,20 @@ class _HybridDetectionDisplay extends StatelessWidget {
                     children: [
                       Icon(
                         Icons.smoke_free,
-                        color: smokingDetected ? Colors.redAccent : Colors.grey,
-                        size: 16,
+                        color: smokingDetected
+                            ? Colors.redAccent
+                            : Colors.grey.shade600,
+                        size: 15,
                       ),
-                      const SizedBox(width: 4),
+                      const SizedBox(width: 5),
                       Expanded(
                         child: Text(
                           smokingDetected ? 'Smoke: YES' : 'Smoke: NO',
                           style: TextStyle(
-                            color:
-                                smokingDetected ? Colors.redAccent : Colors.grey,
-                            fontWeight: FontWeight.bold,
+                            color: smokingDetected
+                                ? Colors.redAccent
+                                : Colors.grey.shade500,
+                            fontWeight: FontWeight.w600,
                             fontSize: 11,
                           ),
                           overflow: TextOverflow.ellipsis,
@@ -714,7 +806,7 @@ class _HybridDetectionDisplay extends StatelessWidget {
 class ErrorApp extends StatelessWidget {
   final String error;
 
-  const ErrorApp({required this.error});
+  const ErrorApp({super.key, required this.error});
 
   @override
   Widget build(BuildContext context) {

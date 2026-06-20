@@ -34,7 +34,7 @@ class ImageUploaderService {
       final dateStr = timestamp.split('T')[0];
       final timeStr = timestamp.split('T')[1].split('.')[0].replaceAll(':', '-');
       final info = additionalInfo.isNotEmpty ? '_$additionalInfo' : '';
-      final fileName = '${alertType}_${dateStr}_${timeStr}${info}.jpg';
+      final fileName = '${alertType}_${dateStr}_$timeStr$info.jpg';
 
       debugPrint('File: $fileName');
       debugPrint('');

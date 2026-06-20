@@ -24,46 +24,60 @@ class VisionBotAppBar extends StatelessWidget implements PreferredSizeWidget {
     return AppBar(
       title: const Text(
         'VisionBot',
-        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        style: TextStyle(
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+          letterSpacing: 0.5,
+        ),
       ),
-      backgroundColor: Colors.red, // Red background to check visibility
-      elevation: 8,
+      flexibleSpace: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Colors.orange.shade700, Colors.orange.shade600],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+      ),
+      elevation: 4,
       toolbarHeight: 60,
       bottom: TabBar(
         controller: tabController,
         tabs: const [
           Tab(
-            icon: Icon(Icons.videocam, color: Colors.white),
+            icon: Icon(Icons.videocam),
             text: 'Surveillance',
           ),
           Tab(
-            icon: Icon(Icons.location_on, color: Colors.white),
+            icon: Icon(Icons.location_on),
             text: 'Location',
           ),
         ],
         labelColor: Colors.white,
-        unselectedLabelColor: Colors.grey.shade400,
-        indicatorColor: Colors.cyan,
+        unselectedLabelColor: Colors.white60,
+        indicatorColor: Colors.white,
+        indicatorWeight: 3,
         indicatorSize: TabBarIndicatorSize.tab,
       ),
       actions: [
         IconButton(
           onPressed: onSettingsPressed,
-          icon: const Icon(Icons.settings, size: 20),
+          icon: const Icon(Icons.settings),
           tooltip: 'Detection Settings',
-          padding: const EdgeInsets.all(8),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
         ),
         IconButton(
           onPressed: onSwitchCameraPressed,
-          icon: const Icon(Icons.cameraswitch, size: 20),
+          icon: const Icon(Icons.cameraswitch),
           tooltip: 'Switch Camera',
-          padding: const EdgeInsets.all(8),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
         ),
         IconButton(
           onPressed: isProcessingFace ? null : onVerifyFacePressed,
-          icon: const Icon(Icons.face, size: 20),
+          icon: const Icon(Icons.face),
           tooltip: 'Verify Face Now',
-          padding: const EdgeInsets.all(8),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
         ),
       ],
     );

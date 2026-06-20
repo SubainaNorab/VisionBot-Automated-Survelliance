@@ -105,7 +105,7 @@ class SupabaseService {
           continue;
         }
 
-        final fileName = '${alertType}_face${i + 1}_${sessionId}.jpg';
+        final fileName = '${alertType}_face${i + 1}_$sessionId.jpg';
         final remotePath = '$alertType/$fileName';
 
         final bytes = await file.readAsBytes();

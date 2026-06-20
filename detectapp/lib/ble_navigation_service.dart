@@ -8,8 +8,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 class BleNavigationService {
   // Nordic UART Service UUIDs — must match ESP32 code
-  static const String SERVICE_UUID =
-      '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+  static const String SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   static const String RX_CHAR_UUID =
       '6e400002-b5a3-f393-e0a9-e50e24dcca9e'; // App writes here
   static const String TX_CHAR_UUID =
@@ -38,11 +37,18 @@ class BleNavigationService {
 
       // Wait for our device
       final completer = Completer<BluetoothDevice>();
+      final discoveredNames = <String>{};
 
       final sub = FlutterBluePlus.scanResults.listen((results) {
         for (final r in results) {
+          final deviceName = r.device.platformName;
+          if (deviceName.isNotEmpty) {
+            discoveredNames.add(deviceName);
+            debugPrint('[BLE] Discovered: "$deviceName" (RSSI: ${r.rssi})');
+          }
+
           if (r.device.platformName == 'AIWatchman-Car') {
-            debugPrint('[BLE] Found AIWatchman-Car!');
+            debugPrint('[BLE] ✅ Found AIWatchman-Car!');
             if (!completer.isCompleted) completer.complete(r.device);
           }
         }
@@ -50,10 +56,18 @@ class BleNavigationService {
 
       BluetoothDevice device;
       try {
-        device = await completer.future
-            .timeout(const Duration(seconds: 10));
+        device = await completer.future.timeout(const Duration(seconds: 10));
       } catch (_) {
-        debugPrint('[BLE] Device not found in scan');
+        debugPrint('[BLE] ❌ Device not found in scan');
+        if (discoveredNames.isNotEmpty) {
+          debugPrint('[BLE] ℹ️  Devices found: ${discoveredNames.join(", ")}');
+          debugPrint('[BLE] ℹ️  Looking for: "AIWatchman-Car"');
+        } else {
+          debugPrint('[BLE] ⚠️  No BLE devices discovered!');
+          debugPrint('[BLE]    - Check if Bluetooth is enabled');
+          debugPrint('[BLE]    - Check if ESP32 is powered on and advertising');
+          debugPrint('[BLE]    - Check app has BLUETOOTH_SCAN permission');
+        }
         sub.cancel();
         await FlutterBluePlus.stopScan();
         return false;

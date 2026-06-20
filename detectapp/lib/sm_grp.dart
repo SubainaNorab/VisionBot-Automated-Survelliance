@@ -271,7 +271,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
 (int, List<double>) _countPersons(List output) {
   final preds = output[0] as List<List<double>>;
   const int inputSize = 640;
-  const double CONFIDENCE_THRESHOLD = 0.25;
+  const double confidenceThreshold = 0.25;
 
   final boxes = <_Box>[];
   double maxScore = 0;
@@ -281,7 +281,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
     final personScore = preds[4][i];
     
     if (personScore > maxScore) maxScore = personScore;
-    if (personScore < CONFIDENCE_THRESHOLD) continue;
+    if (personScore < confidenceThreshold) continue;
 
     double cx = preds[0][i];
     double cy = preds[1][i];

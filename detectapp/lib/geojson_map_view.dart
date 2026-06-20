@@ -19,7 +19,7 @@ import 'path_tracker.dart';
 import 'firestore_command_listener.dart';
 
 class GeoJSONMapView extends StatefulWidget {
-  const GeoJSONMapView({Key? key}) : super(key: key);
+  const GeoJSONMapView({super.key});
 
   @override
   State<GeoJSONMapView> createState() => _GeoJSONMapViewState();
@@ -27,11 +27,11 @@ class GeoJSONMapView extends StatefulWidget {
 
 class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   // ── Map data ───────────────────────────────────────────────────────────────
-  List<LatLng> pathCoordinates = [];
-  List<List<LatLng>> boundaryPolygons = [];
-  final Set<Polyline> polylines = {};
-  final Set<Polygon> polygons = {};
-  Set<Marker> markers = {};
+  late List<LatLng> pathCoordinates;
+  late List<List<LatLng>> boundaryPolygons;
+  final Set<Polyline> polylines = <Polyline>{};
+  final Set<Polygon> polygons = <Polygon>{};
+  late Set<Marker> markers;
   GoogleMapController? _mapController;
 
   // ── BLE ────────────────────────────────────────────────────────────────────
@@ -78,6 +78,9 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   @override
   void initState() {
     super.initState();
+    pathCoordinates = <LatLng>[];
+    boundaryPolygons = <List<LatLng>>[];
+    markers = <Marker>{};
     _loadGeoJSON();
     _setupBleListeners();
     _firestoreListener = FirestoreCommandListener(_ble);
@@ -189,7 +192,9 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
     final now = DateTime.now();
     if (now.difference(_lastCorrectionTime).inMilliseconds <
-        _correctionCooldownMs) return;
+        _correctionCooldownMs) {
+      return;
+    }
 
     _updateState(_navState.copyWith(
       statusMessage: correction.description,
@@ -295,7 +300,9 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   double _sqrtManual(double v) {
     if (v <= 0) return 0;
     double x = v;
-    for (int i = 0; i < 16; i++) x = (x + v / x) / 2;
+    for (int i = 0; i < 16; i++) {
+      x = (x + v / x) / 2;
+    }
     return x;
   }
 
@@ -323,7 +330,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     ));
 
     await _ble.sendCommand(dir);
-    await Future.delayed(Duration(milliseconds: _turnMs));
+    await Future.delayed(const Duration(milliseconds: _turnMs));
     await _ble.sendCommand('F');
 
     _currentWaypointIndex =
@@ -341,7 +348,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     ));
 
     await _ble.sendCommand(dir);
-    await Future.delayed(Duration(milliseconds: _turnMs));
+    await Future.delayed(const Duration(milliseconds: _turnMs));
     await _ble.sendCommand('F');
 
     _isTurning = false;
@@ -612,25 +619,34 @@ class _OffPathBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.orange.shade800,
-        borderRadius: BorderRadius.circular(8),
+        gradient: LinearGradient(
+          colors: [Colors.orange.shade800, Colors.orange.shade700],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(12),
         boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 6),
+          BoxShadow(
+            color: Colors.orange.withOpacity(0.4),
+            blurRadius: 8,
+            spreadRadius: 1,
+          ),
         ],
       ),
       child: const Row(
         children: [
           Icon(Icons.warning_amber_rounded, color: Colors.white, size: 18),
-          SizedBox(width: 8),
+          SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Car not on path — continuing forward',
+              'Car off-path — continuing forward',
               style: TextStyle(
                 color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+                letterSpacing: 0.3,
               ),
             ),
           ),
@@ -647,8 +663,30 @@ class _StatusBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.black87,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.black.withOpacity(0.92),
+            Colors.black.withOpacity(0.85),
+          ],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ),
+        border: Border(
+          top: BorderSide(
+            color: Colors.orange.shade700.withOpacity(0.4),
+            width: 1.5,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.5),
+            blurRadius: 10,
+            offset: const Offset(0, -3),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -657,34 +695,34 @@ class _StatusBar extends StatelessWidget {
             state.statusMessage,
             style: const TextStyle(
               color: Colors.white,
-              fontWeight: FontWeight.bold,
-              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              fontSize: 14,
+              letterSpacing: 0.3,
             ),
           ),
-          const SizedBox(height: 6),
-          Row(
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
             children: [
               _Chip(
-                label: state.bleConnected ? '🔵 BLE' : '⚫ BLE',
+                label:
+                    state.bleConnected ? '🔵 BLE Connected' : '⚫ BLE Offline',
                 color: state.bleConnected ? Colors.blue : Colors.grey,
               ),
-              const SizedBox(width: 8),
               _Chip(
                 label: state.patrolActive ? '🟢 RUNNING' : '⏸ IDLE',
                 color: state.patrolActive ? Colors.green : Colors.grey,
               ),
-              const SizedBox(width: 8),
               _Chip(
                 label: state.carStatus == 'BLOCKED' ? '🚫 BLOCKED' : '✅ CLEAR',
                 color: state.carStatus == 'BLOCKED' ? Colors.red : Colors.green,
               ),
-              if (state.distToWaypoint != null) ...[
-                const SizedBox(width: 8),
+              if (state.distToWaypoint != null)
                 _Chip(
                   label: '📍 ${state.distToWaypoint!.toStringAsFixed(1)}m',
                   color: Colors.orange,
                 ),
-              ],
             ],
           ),
         ],
@@ -701,18 +739,29 @@ class _Chip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.15),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color, width: 1),
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: color.withOpacity(0.6),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: color.withOpacity(0.15),
+            blurRadius: 2,
+            spreadRadius: 0,
+          ),
+        ],
       ),
       child: Text(
         label,
         style: TextStyle(
           color: color,
           fontSize: 11,
-          fontWeight: FontWeight.bold,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.3,
         ),
       ),
     );
@@ -843,24 +892,35 @@ class _RoundButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isEnabled = onPressed != null;
+    final bgColor = isEnabled ? color : Colors.grey.shade800;
+    final iconCol =
+        iconColor ?? (isEnabled ? Colors.white : Colors.grey.shade600);
+
     if (small) {
       return FloatingActionButton.small(
         heroTag: tooltip,
         onPressed: onPressed,
-        backgroundColor: onPressed == null ? Colors.grey.shade800 : color,
+        backgroundColor: bgColor,
+        elevation: isEnabled ? 4 : 0,
         tooltip: tooltip,
-        child: Icon(icon,
-            color:
-                iconColor ?? (onPressed == null ? Colors.grey : Colors.white)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Icon(icon, color: iconCol, size: 20),
       );
     }
+
     return FloatingActionButton(
       heroTag: tooltip,
       onPressed: onPressed,
-      backgroundColor: onPressed == null ? Colors.grey.shade800 : color,
+      backgroundColor: bgColor,
+      elevation: isEnabled ? 6 : 1,
       tooltip: tooltip,
-      child: Icon(icon,
-          color: iconColor ?? (onPressed == null ? Colors.grey : Colors.white)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Icon(icon, color: iconCol, size: 26),
     );
   }
 }

@@ -63,7 +63,7 @@ class PathTracker {
   /// Returns what correction (if any) the car needs
   PathCorrection evaluate(LatLng carPos) {
     if (path.length < 2) {
-      return PathCorrection(
+      return const PathCorrection(
         status: PathStatus.onPath,
         command: null,
         crossTrackM: 0,
@@ -242,7 +242,9 @@ class PathTracker {
   double _sqrt(double v) {
     if (v <= 0) return 0;
     double x = v;
-    for (int i = 0; i < 10; i++) x = (x + v / x) / 2;
+    for (int i = 0; i < 10; i++) {
+      x = (x + v / x) / 2;
+    }
     return x;
   }
 }

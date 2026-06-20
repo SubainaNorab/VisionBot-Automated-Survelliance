@@ -89,10 +89,10 @@ class SurveillanceController {
   bool _processingVerification = false;
 
   final Map<String, DateTime> _recentlyVerified = {};
-  final Duration _verificationCacheDuration = Duration(seconds: 30);
+  const Duration _verificationCacheDuration = Duration(seconds: 30);
 
   // ✅ Hybrid tracking
-  int _lastYoloPeopleCount = 0;
+  final int _lastYoloPeopleCount = 0;
   int _lastVerifiedPeopleCount = 0;
   int _lastKnownCount = 0;
   int _lastUnknownCount = 0;
@@ -196,7 +196,7 @@ class SurveillanceController {
 
   String? _formatLocation(Position? position) {
     if (position == null) return null;
-    return '${position.latitude?.toStringAsFixed(4)}, ${position.longitude?.toStringAsFixed(4)}';
+    return '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}';
   }
 
   // ✅ NEW: Separate verification loop - runs independently
@@ -427,7 +427,7 @@ class SurveillanceController {
           final result = await ImageUploaderService.saveAndUploadAlertImage(
             sourcePath: _currentFramePath!,
             alertType: 'group_detected',
-            additionalInfo: 'face_${personCount}_k${knownCount}_u${unknownCount}',
+            additionalInfo: 'face_${personCount}_k${knownCount}_u$unknownCount',
           );
 
           imageUrl = result['remote'];
