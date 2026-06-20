@@ -35,22 +35,38 @@ class FirestoreCommandListener {
 
   // ── Listen for commands written by VisionBot ──────────────────────────────
   void _listenForCommands() {
+    final cutoff = DateTime.now().subtract(const Duration(minutes: 5));
+
     _commandSub = _db
         .collection('ble_commands')
         .where('executed', isEqualTo: false)
-        // REMOVE: .orderBy('sent_at', descending: false)
-        // Composite index not needed now
+        .where('sent_at', isGreaterThan: Timestamp.fromDate(cutoff))
         .snapshots()
         .listen((snapshot) async {
       for (final change in snapshot.docChanges) {
-        if (change.type == DocumentChangeType.added) {
+        if (change.type == DocumentChangeType.added ||
+            change.type == DocumentChangeType.modified) {
           final data = change.doc.data()!;
           final cmd = data['command'] as String?;
 
           if (cmd != null && ['F', 'L', 'R', 'S', 'E'].contains(cmd)) {
             debugPrint('[Firestore] Received command: $cmd');
-            await _ble.sendCommand(cmd);
-            await change.doc.reference.update({'executed': true});
+            if (_ble.isConnected) {
+              try {
+                await _ble.sendCommand(cmd);
+              } catch (e) {
+                debugPrint('[Firestore] BLE send error: $e');
+              }
+            } else {
+              debugPrint('[Firestore] BLE not connected, skipping cmd: $cmd');
+            }
+
+            // Mark executed regardless to avoid replay loops when BLE is unavailable
+            try {
+              await change.doc.reference.update({'executed': true});
+            } catch (e) {
+              debugPrint('[Firestore] Failed to mark command executed: $e');
+            }
           }
         }
       }

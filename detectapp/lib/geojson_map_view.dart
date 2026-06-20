@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'ble_navigation_service.dart';
 import 'navigation_state.dart';
 import 'path_tracker.dart';
@@ -34,6 +35,9 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   late Set<Marker> markers;
   GoogleMapController? _mapController;
 
+  // ── Firestore ─────────────────────────────────────────────────────────────
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
+
   // ── BLE ────────────────────────────────────────────────────────────────────
   final BleNavigationService _ble = BleNavigationService();
 
@@ -48,6 +52,20 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   // ── Turn state ─────────────────────────────────────────────────────────────
   bool _isTurning = false;
   int _currentWaypointIndex = 0;
+  // ── Command sending ────────────────────────────────────────────────────────
+  Future<void> _sendCommand(String cmd) async {
+    try {
+      await _db.collection('ble_commands').add({
+        'command': cmd,
+        'sent_at': FieldValue.serverTimestamp(),
+        'sent_at_client': Timestamp.fromDate(DateTime.now()),
+        'executed': false,
+      });
+      debugPrint('[Firestore] Command sent: $cmd');
+    } catch (e) {
+      debugPrint('[Firestore] Error sending command: $e');
+    }
+  }
 
   // ── Path tracking ──────────────────────────────────────────────────────────
   PathTracker? _pathTracker;
@@ -103,6 +121,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
       _firestoreListener?.updateObstacleStatus(status);
       _updateState(_navState.copyWith(carStatus: status));
       if (status == 'CLEAR' && _navState.patrolActive && !_isTurning) {
+        _sendCommand('F');
         _ble.sendCommand('F');
       }
     });
@@ -235,8 +254,10 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
   Future<void> _executeCorrectionTurn(String dir, int durationMs) async {
     _isTurning = true;
+    await _sendCommand(dir);
     await _ble.sendCommand(dir);
     await Future.delayed(Duration(milliseconds: durationMs));
+    await _sendCommand('F');
     await _ble.sendCommand('F');
     _isTurning = false;
   }
@@ -329,8 +350,10 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
       statusMessage: 'Turning ${dir == "L" ? "Left ←" : "Right →"}...',
     ));
 
+    await _sendCommand(dir);
     await _ble.sendCommand(dir);
     await Future.delayed(const Duration(milliseconds: _turnMs));
+    await _sendCommand('F');
     await _ble.sendCommand('F');
 
     _currentWaypointIndex =
@@ -347,8 +370,10 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
       statusMessage: 'Manual ${dir == "L" ? "Left ←" : "Right →"}',
     ));
 
+    await _sendCommand(dir);
     await _ble.sendCommand(dir);
     await Future.delayed(const Duration(milliseconds: _turnMs));
+    await _sendCommand('F');
     await _ble.sendCommand('F');
 
     _isTurning = false;
@@ -386,6 +411,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
       statusMessage: '🚗 Moving forward...',
     ));
 
+    await _sendCommand('F');
     await _ble.sendCommand('F');
     _startGps();
     debugPrint('[NAV] Patrol started');
@@ -395,6 +421,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     _isTurning = false;
     _unlockFromPath();
     _stopGps();
+    await _sendCommand('S');
     await _ble.sendCommand('S');
     _updateState(_navState.copyWith(
       patrolActive: false,
@@ -407,6 +434,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     _isTurning = false;
     _unlockFromPath();
     _stopGps();
+    await _sendCommand('E');
     await _ble.sendCommand('E');
     _updateState(_navState.copyWith(
       patrolActive: false,
