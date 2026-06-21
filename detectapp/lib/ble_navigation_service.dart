@@ -27,11 +27,29 @@ class BleNavigationService {
   Stream<bool> get connectionStream => _connectionController.stream;
   bool get isConnected => _device != null && (_rxChar != null);
 
+  bool _isLikelyTargetDevice(BluetoothDevice device, String? name) {
+    final normalizedName = (name ?? device.platformName).toLowerCase();
+    return normalizedName.contains('aiwatchman') ||
+        normalizedName.contains('watchman') ||
+        normalizedName.contains('esp32') ||
+        normalizedName.contains('car');
+  }
+
+  bool _advertisesTargetService(ScanResult result) {
+    return result.advertisementData.serviceUuids.any(
+      (uuid) => uuid.toString().toLowerCase() == SERVICE_UUID.toLowerCase(),
+    );
+  }
+
   /// Scan and connect to AIWatchman-Car
   Future<bool> connect() async {
     try {
-      debugPrint(
-          '[BLE] Bluetooth adapter state: ${await FlutterBluePlus.adapterState.first}');
+      final adapterState = await FlutterBluePlus.adapterState.first;
+      if (adapterState != BluetoothAdapterState.on) {
+        debugPrint('[BLE] Bluetooth is OFF: $adapterState');
+        return false;
+      }
+      debugPrint('[BLE] Bluetooth adapter state: $adapterState');
       debugPrint('[BLE] Starting scan for AIWatchman-Car...');
 
       // Start scan
@@ -40,6 +58,7 @@ class BleNavigationService {
       // Wait for our device
       final completer = Completer<BluetoothDevice>();
       final discoveredNames = <String>{};
+      BluetoothDevice? fallbackDevice;
 
       final sub = FlutterBluePlus.scanResults.listen((results) {
         for (final r in results) {
@@ -49,8 +68,15 @@ class BleNavigationService {
             debugPrint('[BLE] Discovered: "${deviceName}"');
           }
 
-          if (r.device.platformName == 'AIWatchman-Car') {
-            if (!completer.isCompleted) completer.complete(r.device);
+          if (fallbackDevice == null) {
+            fallbackDevice = r.device;
+          }
+
+          final isTarget = _isLikelyTargetDevice(r.device, deviceName) ||
+              _advertisesTargetService(r);
+          if (isTarget && !completer.isCompleted) {
+            debugPrint('[BLE] Candidate device found: ${r.device.remoteId}');
+            completer.complete(r.device);
           }
         }
       });
@@ -59,14 +85,22 @@ class BleNavigationService {
       try {
         device = await completer.future.timeout(const Duration(seconds: 10));
       } catch (_) {
-        if (discoveredNames.isNotEmpty) {
-          debugPrint('[BLE] Devices seen: ${discoveredNames.join(", ")}');
+        if (fallbackDevice != null) {
+          final fallbackName = fallbackDevice!.platformName.isNotEmpty
+              ? fallbackDevice!.platformName
+              : fallbackDevice!.remoteId.toString();
+          debugPrint('[BLE] Using fallback discovered device: $fallbackName');
+          device = fallbackDevice!;
         } else {
-          debugPrint('[BLE] No BLE devices found at all');
+          if (discoveredNames.isNotEmpty) {
+            debugPrint('[BLE] Devices seen: ${discoveredNames.join(", ")}');
+          } else {
+            debugPrint('[BLE] No BLE devices found at all');
+          }
+          sub.cancel();
+          await FlutterBluePlus.stopScan();
+          return false;
         }
-        sub.cancel();
-        await FlutterBluePlus.stopScan();
-        return false;
       }
 
       sub.cancel();
