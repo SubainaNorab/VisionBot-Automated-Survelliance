@@ -115,16 +115,17 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   }
 
   // ── BLE listeners ──────────────────────────────────────────────────────────
-
+  bool _emergencyLatched = false;
   void _setupBleListeners() {
     _ble.statusStream.listen((status) {
       _firestoreListener?.updateObstacleStatus(status);
       _updateState(_navState.copyWith(carStatus: status));
-      if (status == 'CLEAR' && _navState.patrolActive && !_isTurning) {
-        _sendCommand('F');
-        _ble.sendCommand('F');
-      }
-    });
+      if (status == 'CLEAR' && _navState.patrolActive && 
+        !_isTurning && !_emergencyLatched) {
+      _sendCommand('F');
+      _ble.sendCommand('F');
+    }
+  });
 
     _ble.connectionStream.listen((connected) {
       _updateState(_navState.copyWith(
@@ -402,7 +403,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
   Future<void> _startPatrol() async {
     if (!_navState.bleConnected) return;
-
+    _emergencyLatched = false;
     _currentWaypointIndex = 0;
     _isTurning = false;
 
@@ -432,6 +433,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
   Future<void> _emergencyStop() async {
     _isTurning = false;
+    _emergencyLatched = true;
     _unlockFromPath();
     _stopGps();
     await _sendCommand('E');

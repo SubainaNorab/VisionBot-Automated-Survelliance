@@ -40,7 +40,7 @@ class FirestoreCommandListener {
     _commandSub = _db
         .collection('ble_commands')
         .where('executed', isEqualTo: false)
-        .where('sent_at_client', isGreaterThan: Timestamp.fromDate(cutoff))
+   //     .where('sent_at', isGreaterThan: Timestamp.fromDate(cutoff))
         .snapshots()
         .listen((snapshot) async {
       for (final change in snapshot.docChanges) {
@@ -52,6 +52,13 @@ class FirestoreCommandListener {
 
             final cmd = data['command'] as String?;
 
+            final sentAt = (data['sent_at_client'] as Timestamp?)?.toDate();
+            if (sentAt != null && 
+              DateTime.now().difference(sentAt).inMinutes > 5) {
+                // Mark old unexecuted commands as executed to clean up
+                await change.doc.reference.update({'executed': true});
+                continue;
+              }
             if (cmd != null && ['F', 'L', 'R', 'S', 'E'].contains(cmd)) {
               debugPrint('[Firestore] Received command: $cmd');
 
