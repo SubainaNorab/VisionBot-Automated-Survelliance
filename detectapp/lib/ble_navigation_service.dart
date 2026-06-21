@@ -30,6 +30,8 @@ class BleNavigationService {
   /// Scan and connect to AIWatchman-Car
   Future<bool> connect() async {
     try {
+      debugPrint(
+          '[BLE] Bluetooth adapter state: ${await FlutterBluePlus.adapterState.first}');
       debugPrint('[BLE] Starting scan for AIWatchman-Car...');
 
       // Start scan
