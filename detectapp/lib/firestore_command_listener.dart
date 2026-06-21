@@ -62,7 +62,7 @@ class FirestoreCommandListener {
                   debugPrint('[Firestore] BLE send error: $e');
                 }
               } else {
-                debugPrint('[Firestore] BLE not connected, skipping cmd: $cmd');
+                debugPrint('[Firestore] BLE not connected, skipping: $cmd');
               }
 
               try {
