@@ -40,7 +40,7 @@ class FirestoreCommandListener {
     _commandSub = _db
         .collection('ble_commands')
         .where('executed', isEqualTo: false)
-        .where('sent_at', isGreaterThan: Timestamp.fromDate(cutoff))
+        .where('sent_at_client', isGreaterThan: Timestamp.fromDate(cutoff))
         .snapshots()
         .listen((snapshot) async {
       for (final change in snapshot.docChanges) {
