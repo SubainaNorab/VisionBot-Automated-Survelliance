@@ -1,4 +1,4 @@
-// main.dart - MERGED: Hybrid detection + Path navigation
+// : Hybrid detection + Path navigation
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -22,12 +22,12 @@ void main() async {
   debugPrint('');
 
   try {
-    debugPrint('1️⃣ Reading Supabase credentials...');
+    debugPrint(' Reading Supabase credentials...');
     final supabaseUrl = dotenv.env['SUPABASE_URL']!;
     final supabaseAnonKey = dotenv.env['SUPABASE_ANON_KEY']!;
 
     debugPrint('');
-    debugPrint('2️⃣ Initializing Firebase...');
+    debugPrint('Initializing Firebase...');
     await Future.wait([
       Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
@@ -37,25 +37,25 @@ void main() async {
         anonKey: supabaseAnonKey,
       ),
     ]);
-    debugPrint('   ✅ Firebase & Supabase ready');
+    debugPrint(' Firebase & Supabase ready');
 
     debugPrint('');
-    debugPrint('3️⃣ Initializing Supabase Storage...');
+    debugPrint('Initializing Supabase Storage...');
     await SupabaseService.initialize(
       supabaseUrl: supabaseUrl,
       supabaseAnonKey: supabaseAnonKey,
     );
-    debugPrint('   ✅ Supabase Storage ready');
+    debugPrint(' Supabase Storage ready');
 
     debugPrint('');
-    debugPrint('4️⃣ Requesting permissions...');
+    debugPrint(' Requesting permissions...');
     await _requestAllPermissions();
-    debugPrint('   ✅ Permissions handled');
+    debugPrint(' Permissions handled');
 
     debugPrint('');
     debugPrint('╔═══════════════════════════════════╗');
     debugPrint('║   App Ready - Starting VisionBot   ║');
-    debugPrint('║    HYBRID MODE + PATH FOLLOW 🚀    ║');
+    debugPrint('║    HYBRID MODE + PATH FOLLOW    ║');
     debugPrint('╚═══════════════════════════════════╝');
     debugPrint('');
 
@@ -63,10 +63,10 @@ void main() async {
   } catch (e, st) {
     debugPrint('');
     debugPrint('╔═══════════════════════════════════╗');
-    debugPrint('║  ❌ STARTUP FAILED                 ║');
+    debugPrint('║  STARTUP FAILED                 ║');
     debugPrint('╚═══════════════════════════════════╝');
     debugPrint('');
-    debugPrint('❌ Error: $e');
+    debugPrint('Error: $e');
     debugPrint('   Stack: $st');
     debugPrint('');
     runApp(ErrorApp(error: e.toString()));
@@ -89,13 +89,13 @@ Future<void> _requestAllPermissions() async {
       ].request();
     }
 
-    debugPrint('📋 Permission Results:');
+    debugPrint(' Permission Results:');
     statuses.forEach((permission, status) {
       final emoji = status.isGranted ? '✅' : '⚠️';
       debugPrint('   $emoji ${permission.toString().split('.').last}: $status');
     });
   } catch (e) {
-    debugPrint('❌ Permission request failed: $e');
+    debugPrint(' Permission request failed: $e');
   }
 }
 
@@ -139,7 +139,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
 
     WidgetsBinding.instance.addObserver(this);
 
-    // ✅ TWO TABS: Surveillance + Location
+    //  Surveillance + Location
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(_onMainTabChanged);
 
@@ -154,10 +154,10 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
     if (_tabController.indexIsChanging) return;
 
     if (_tabController.index == 1) {
-      // ✅ Switching to MAP TAB
+      //  Switching to MAP TAB
       _prepareMapTab();
     } else {
-      // ✅ Switching to SURVEILLANCE TAB
+      //  Switching to SURVEILLANCE TAB
       _prepareSurveillanceTab();
     }
   }
@@ -166,7 +166,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
     if (!mounted) return;
     setState(() => _mapContentReady = false);
 
-    // ✅ Pause surveillance before mounting map
+    //  Pause surveillance before mounting map
     await _controller.pauseForMapTab();
 
     if (!mounted || _tabController.index != 1) return;
@@ -177,7 +177,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
     if (!mounted) return;
     setState(() => _mapContentReady = false);
 
-    // ✅ Resume surveillance after leaving map
+    //  Resume surveillance after leaving map
     await _controller.resumeFromMapTab();
 
     if (!mounted || _tabController.index != 0) return;
@@ -187,7 +187,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    debugPrint('📱 App lifecycle: $state');
+    debugPrint('App lifecycle: $state');
   }
 
   @override
@@ -216,14 +216,14 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
             onVerifyFacePressed: _controller.verifyFace,
             isProcessingFace: state.processingFace,
           ),
-          // ✅ AnimatedBuilder: Switch between surveillance + map
+          // AnimatedBuilder: Switch between surveillance + map
           body: AnimatedBuilder(
             animation: _tabController,
             builder: (context, _) {
               final onLocation = _tabController.index == 1;
 
               if (!onLocation) {
-                // ✅ SURVEILLANCE TAB
+                //  SURVEILLANCE TAB
                 return Column(
                   children: [
                     Expanded(
@@ -250,7 +250,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                 );
               }
 
-              // ✅ LOCATION/MAP TAB
+              //  LOCATION/MAP TAB
               if (!_mapContentReady) {
                 return const Center(
                   child: Column(
@@ -377,7 +377,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
           ),
           const SizedBox(height: 10),
 
-          // ✅ HYBRID Detection Display
+          // HYBRID Detection Display
           _HybridDetectionDisplay(
             yoloPeopleCount: state.yoloPeopleCount,
             verifiedPeopleCount: state.verifiedPeopleCount,
@@ -505,7 +505,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                     idealMax: 350,
                   );
                   Navigator.pop(context);
-                  _showSnackbar('✅ Close range (1-2m)');
+                  _showSnackbar(' Close range (1-2m)');
                 },
               ),
               Container(
@@ -534,7 +534,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                       idealMax: 450,
                     );
                     Navigator.pop(context);
-                    _showSnackbar('✅ Medium range (2-4m) - RECOMMENDED');
+                    _showSnackbar(' Medium range (2-4m) - RECOMMENDED');
                   },
                 ),
               ),
@@ -555,7 +555,7 @@ class _SurveillanceScreenState extends State<SurveillanceScreen>
                     idealMax: 550,
                   );
                   Navigator.pop(context);
-                  _showSnackbar('✅ Long range (3-6m)');
+                  _showSnackbar(' Long range (3-6m)');
                 },
               ),
             ],
