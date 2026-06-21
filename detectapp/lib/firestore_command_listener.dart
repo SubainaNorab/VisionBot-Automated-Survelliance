@@ -11,6 +11,7 @@ import 'ble_navigation_service.dart';
 class FirestoreCommandListener {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final BleNavigationService _ble;
+  VoidCallback? onUserAppCommand;
 
   StreamSubscription? _commandSub;
   Timer? _statusTimer;
@@ -60,24 +61,29 @@ class FirestoreCommandListener {
                 continue;
               }
             if (cmd != null && ['F', 'L', 'R', 'S', 'E'].contains(cmd)) {
-              debugPrint('[Firestore] Received command: $cmd');
+  debugPrint('[Firestore] Received command: $cmd');
 
-              if (_ble.isConnected) {
-                try {
-                  await _ble.sendCommand(cmd);
-                } catch (e) {
-                  debugPrint('[Firestore] BLE send error: $e');
-                }
-              } else {
-                debugPrint('[Firestore] BLE not connected, skipping: $cmd');
-              }
+  if (_ble.isConnected) {
+    try {
+      await _ble.sendCommand(cmd);
+    } catch (e) {
+      debugPrint('[Firestore] BLE send error: $e');
+    }
+  } else {
+    debugPrint('[Firestore] BLE not connected, skipping: $cmd');
+  }
 
-              try {
-                await change.doc.reference.update({'executed': true});
-              } catch (e) {
-                debugPrint('[Firestore] Failed to mark executed: $e');
-              }
-            }
+  final source = data['source'] as String? ?? '';
+  if (source == 'user_app') {
+    onUserAppCommand?.call();
+  }
+
+  try {
+    await change.doc.reference.update({'executed': true});
+  } catch (e) {
+    debugPrint('[Firestore] Failed to mark executed: $e');
+  }
+}
           } catch (e) {
             debugPrint('[Firestore] Command processing error: $e');
           }

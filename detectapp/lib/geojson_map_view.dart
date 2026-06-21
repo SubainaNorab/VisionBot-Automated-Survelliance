@@ -102,6 +102,11 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     _loadGeoJSON();
     _setupBleListeners();
     _firestoreListener = FirestoreCommandListener(_ble);
+    _firestoreListener!.onUserAppCommand = () {
+  setState(() {
+    _lastUserAppCommandAt = DateTime.now();
+  });
+};
     _firestoreListener!.start();
   }
 
@@ -116,14 +121,19 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
   // ── BLE listeners ──────────────────────────────────────────────────────────
   bool _emergencyLatched = false;
+  DateTime _lastUserAppCommandAt = DateTime.fromMillisecondsSinceEpoch(0);
   void _setupBleListeners() {
     _ble.statusStream.listen((status) {
       _firestoreListener?.updateObstacleStatus(status);
       _updateState(_navState.copyWith(carStatus: status));
       if (status == 'CLEAR' && _navState.patrolActive && 
         !_isTurning && !_emergencyLatched) {
-      _sendCommand('F');
-      _ble.sendCommand('F');
+        final msSinceUserCmd = DateTime.now()
+        .difference(_lastUserAppCommandAt).inMilliseconds;
+          if (msSinceUserCmd > 3000) {
+            _sendCommand('F');
+            _ble.sendCommand('F');
+          }
     }
   });
 
