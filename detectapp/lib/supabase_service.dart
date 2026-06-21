@@ -16,25 +16,24 @@ class SupabaseService {
     try {
       debugPrint('');
       debugPrint('═══════════════════════════════════');
-      debugPrint('🔧 Initializing Supabase Storage');
+      debugPrint(' Initializing Supabase Storage');
       debugPrint('═══════════════════════════════════');
 
       _supabaseUrl = supabaseUrl.replaceAll(RegExp(r'\/$'), '');
       _supabaseAnonKey = supabaseAnonKey;
 
-      debugPrint('✅ Supabase initialized');
+      debugPrint(' Supabase initialized');
       debugPrint('   URL: ${supabaseUrl.substring(0, 20)}...');
       debugPrint('   Bucket: $_bucket');
       debugPrint('═══════════════════════════════════');
       debugPrint('');
     } catch (e, st) {
-      debugPrint('❌ Supabase initialization failed: $e');
+      debugPrint(' Supabase initialization failed: $e');
       debugPrint('   Stack: $st');
       rethrow;
     }
   }
 
-  /// Upload alert image to Supabase (FIXED)
   static Future<String?> uploadAlertImage({
     required String localPath,
     required String alertType,
@@ -44,21 +43,21 @@ class SupabaseService {
       final file = File(localPath);
 
       if (!await file.exists()) {
-        debugPrint('❌ File not found: $localPath');
+        debugPrint(' File not found: $localPath');
         return null;
       }
 
       final fileSize = await file.length();
       final remotePath = '$alertType/$fileName';
 
-      debugPrint('📤 Uploading to Supabase (FIXED SDK)');
+      debugPrint(' Uploading to Supabase (FIXED SDK)');
       debugPrint('   Type: $alertType');
       debugPrint('   File: $fileName');
       debugPrint('   Size: ${(fileSize / 1024).toStringAsFixed(2)} KB');
 
       final bytes = await file.readAsBytes();
 
-      // ✅ FIX: Use official Supabase client
+      
       await Supabase.instance.client.storage
           .from(_bucket)
           .uploadBinary(
@@ -74,12 +73,12 @@ class SupabaseService {
           .from(_bucket)
           .getPublicUrl(remotePath);
 
-      debugPrint('✅ Upload successful');
-      debugPrint('🔗 URL: $publicUrl');
+      debugPrint(' Upload successful');
+      debugPrint(' URL: $publicUrl');
 
       return publicUrl;
     } catch (e, st) {
-      debugPrint('❌ Upload error: $e');
+      debugPrint(' Upload error: $e');
       debugPrint('   Stack: $st');
       return null;
     }
@@ -94,14 +93,14 @@ class SupabaseService {
     final uploadedUrls = <String>[];
 
     try {
-      debugPrint('📤 Uploading ${localPaths.length} face crops');
+      debugPrint('Uploading ${localPaths.length} face crops');
 
       for (int i = 0; i < localPaths.length; i++) {
         final localPath = localPaths[i];
         final file = File(localPath);
 
         if (!await file.exists()) {
-          debugPrint('⚠️ Face ${i + 1} not found');
+          debugPrint(' Face ${i + 1} not found');
           continue;
         }
 
@@ -126,12 +125,12 @@ class SupabaseService {
 
         uploadedUrls.add(url);
 
-        debugPrint('✅ Face ${i + 1} uploaded');
+        debugPrint(' Face ${i + 1} uploaded');
       }
 
       return uploadedUrls;
     } catch (e) {
-      debugPrint('❌ Face upload error: $e');
+      debugPrint(' Face upload error: $e');
       return uploadedUrls;
     }
   }

@@ -1,4 +1,4 @@
-// camera.dart - FIXED: Camera session management
+// camera.dart 
 
 import 'dart:async';
 import 'package:camera/camera.dart';
@@ -26,7 +26,7 @@ class CameraService {
       final cam = _pickCamera(preferred) ?? _cameras.first;
       await _start(cam);
     } catch (e) {
-      debugPrint('❌ Camera init error: $e');
+      debugPrint('Camera init error: $e');
     }
   }
 
@@ -37,7 +37,6 @@ class CameraService {
     return null;
   }
 
-  // ✅ FIXED: Safer camera startup
   Future<void> _start(CameraDescription cam) async {
     try {
       await _controller?.dispose();
@@ -59,15 +58,15 @@ class CameraService {
         if (maxExposure > 0) {
           await _controller!.setExposureOffset(maxExposure * 0.3);
           debugPrint(
-              '📸 Camera: Exposure boosted (+${(maxExposure * 0.3).toStringAsFixed(2)})');
+              'Camera: Exposure boosted (+${(maxExposure * 0.3).toStringAsFixed(2)})');
         }
 
-        debugPrint('✅ Camera optimized: high resolution + auto exposure');
+        debugPrint('Camera optimized: high resolution + auto exposure');
       } catch (e) {
-        debugPrint('⚠️ Camera settings failed: $e (continuing)');
+        debugPrint(' Camera settings failed: $e (continuing)');
       }
     } catch (e, st) {
-      debugPrint('❌ Camera start failed: $e\n$st');
+      debugPrint(' Camera start failed: $e\n$st');
       rethrow;
     }
   }
@@ -84,11 +83,10 @@ class CameraService {
       final cam = _pickCamera(_lensDirection) ?? _cameras.first;
       await _start(cam);
     } catch (e) {
-      debugPrint('❌ Switch camera failed: $e');
+      debugPrint('Switch camera failed: $e');
     }
   }
 
-  // ✅ FIXED: Safety checks before taking picture
   Future<XFile> takePicture() async {
     try {
       final c = _controller;
@@ -98,7 +96,7 @@ class CameraService {
       }
 
       if (c.value.isTakingPicture) {
-        debugPrint('⚠️ Camera busy, waiting...');
+        debugPrint(' Camera busy, waiting...');
         await Future.delayed(const Duration(milliseconds: 100));
       }
 
@@ -108,7 +106,7 @@ class CameraService {
 
       return c.takePicture();
     } catch (e, st) {
-      debugPrint('❌ Take picture failed: $e\n$st');
+      debugPrint(' Take picture failed: $e\n$st');
       rethrow;
     }
   }
@@ -123,46 +121,44 @@ class CameraService {
       }
 
       if (c.value.isStreamingImages) {
-        debugPrint('⚠️ Stream already running');
+        debugPrint('Stream already running');
         return;
       }
 
       await c.startImageStream(onFrame);
-      debugPrint('✅ Image stream started');
+      debugPrint(' Image stream started');
     } catch (e, st) {
-      debugPrint('❌ Start stream failed: $e\n$st');
+      debugPrint(' Start stream failed: $e\n$st');
       rethrow;
     }
   }
 
-  // ✅ FIXED: Safe stream stop (IMPORTANT FIXES HERE)
+  
   Future<void> stopStream() async {
     try {
       final c = _controller;
 
       if (c == null) {
-        debugPrint('⚠️ Controller null when stopping stream');
+        debugPrint(' Controller null when stopping stream');
         return;
       }
 
-      // 🔥 FIX 1: extra safety check
       if (!c.value.isInitialized) return;
 
       if (!c.value.isStreamingImages) {
-        debugPrint('⚠️ Stream not running');
+        debugPrint(' Stream not running');
         return;
       }
 
-      // 🔥 FIX 2: prevent native crash
       try {
         await c.stopImageStream();
       } catch (e) {
-        debugPrint('⚠️ stopImageStream safe ignore: $e');
+        debugPrint(' stopImageStream safe ignore: $e');
       }
 
-      debugPrint('✅ Image stream stopped');
+      debugPrint('Image stream stopped');
     } catch (e) {
-      debugPrint('⚠️ Stop stream error: $e (continuing)');
+      debugPrint(' Stop stream error: $e (continuing)');
     }
   }
 
@@ -176,30 +172,28 @@ class CameraService {
     return CameraPreview(c);
   }
 
-  // ✅ FIXED: Safe disposal (IMPORTANT RACE FIX)
   Future<void> dispose() async {
     if (_isDisposed) {
-      debugPrint('⚠️ Already disposed');
+      debugPrint(' Already disposed');
       return;
     }
 
     _isDisposed = true;
 
     try {
-      // 🔥 FIX: small delay avoids race with frame callback
       await Future.delayed(const Duration(milliseconds: 50));
 
       await stopStream();
     } catch (e) {
-      debugPrint('⚠️ Stop stream during dispose: $e');
+      debugPrint(' Stop stream during dispose: $e');
     }
 
     try {
       await _controller?.dispose();
       _controller = null;
-      debugPrint('✅ Camera disposed');
+      debugPrint(' Camera disposed');
     } catch (e) {
-      debugPrint('⚠️ Dispose error: $e');
+      debugPrint(' Dispose error: $e');
     }
   }
 }

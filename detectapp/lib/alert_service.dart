@@ -1,4 +1,4 @@
-// alert_service.dart - UPDATED: Add location parameters
+// alert_service.dart -
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
@@ -53,7 +53,7 @@ class AlertService {
       'location_name': locationName,
     });
     
-    debugPrint('✅ Unknown face alert saved with location: $locationName');
+    debugPrint(' Unknown face alert saved with location: $locationName');
   }
 
   Future<void> createGroupAlert({
@@ -87,9 +87,9 @@ class AlertService {
         'longitude': longitude,
         'location_name': locationName,
       });
-      debugPrint('✅ Group alert saved with location: $locationName');
+      debugPrint(' Group alert saved with location: $locationName');
     } catch (e) {
-      debugPrint('❌ Failed to save group alert: $e');
+      debugPrint(' Failed to save group alert: $e');
     }
   }
 
@@ -124,7 +124,7 @@ class AlertService {
       });
       debugPrint('🚬 Smoking alert saved with location: $locationName');
     } catch (e) {
-      debugPrint('❌ Failed to save smoking alert: $e');
+      debugPrint(' Failed to save smoking alert: $e');
     }
   }
 

@@ -1,4 +1,4 @@
-// surveillance_controller.dart - OPTIMIZED: Parallel YOLO + Face detection
+//  Parallel YOLO + Face detection
 
 import 'dart:async';
 import 'dart:io';
@@ -81,7 +81,7 @@ class SurveillanceController {
   bool _autoVerify = true;
   Timer? _statusTimer;
   Timer? _cacheCleanupTimer;
-  Timer? _verificationTimer; // ✅ Separate timer for verification
+  Timer? _verificationTimer; 
 
   bool _lastGroupState = false;
   bool _lastSmokeState = false;
@@ -90,7 +90,6 @@ class SurveillanceController {
 
   final Map<String, DateTime> _recentlyVerified = {};
 final Duration _verificationCacheDuration = Duration(seconds: 30);
-  // ✅ Hybrid tracking
   final int _lastYoloPeopleCount = 0;
   int _lastVerifiedPeopleCount = 0;
   int _lastKnownCount = 0;
@@ -119,33 +118,33 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
     try {
       debugPrint('');
       debugPrint('═══════════════════════════════════');
-      debugPrint('📱 Initializing SurveillanceController');
+      debugPrint('Initializing SurveillanceController');
       debugPrint('═══════════════════════════════════');
 
-      debugPrint('1️⃣ Loading face verifier...');
+      debugPrint(' Loading face verifier...');
       await _verifier.initialize();
-      debugPrint('   ✅ Verifier ready');
+      debugPrint(' Verifier ready');
 
-      debugPrint('2️⃣ Loading YOLO detector...');
+      debugPrint(' Loading YOLO detector...');
       await _multi.initialize();
-      debugPrint('   ✅ YOLO ready');
+      debugPrint(' YOLO ready');
 
-      debugPrint('3️⃣ Starting camera...');
+      debugPrint(' Starting camera...');
       await _camera.initialize(preferred: preferredLens);
-      debugPrint('   ✅ Camera ready');
+      debugPrint(' Camera ready');
 
       await _camera.startStream(_onFrame);
-      debugPrint('✅ Camera stream started');
+      debugPrint('Camera stream started');
 
       _startStatusPolling();
       _startCacheCleanup();
-      _startVerificationLoop(); // ✅ Separate verification loop
+      _startVerificationLoop(); 
 
       _updateState(_state.copyWith(isBooting: false, faceStatus: 'Ready'));
 
       debugPrint('');
-      debugPrint('✅ SurveillanceController initialized');
-      debugPrint('🎯 HYBRID PARALLEL MODE:');
+      debugPrint(' SurveillanceController initialized');
+      debugPrint(' HYBRID PARALLEL MODE:');
       debugPrint('   • YOLO: 4 FPS (real-time people detection)');
       debugPrint('   • FACE: On-demand (identity verification)');
       debugPrint('   • GROUP: YOLO(>=1) + FACE-VERIFIED = ALERT ⚡');
@@ -156,7 +155,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
         _startVerificationLoop();
       }
     } catch (e, st) {
-      debugPrint('❌ Init failed: $e\n$st');
+      debugPrint(' Init failed: $e\n$st');
       _updateState(_state.copyWith(isBooting: false, faceStatus: 'Failed'));
     }
   }
@@ -198,22 +197,20 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
     return '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}';
   }
 
-  // ✅ NEW: Separate verification loop - runs independently
   void _startVerificationLoop() {
     _verificationTimer?.cancel();
     _verificationTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       if (!mounted || !_autoVerify || _processingVerification) return;
       _runVerificationAsync(); // Fire and forget
     });
-    debugPrint('🔄 Verification loop started (2s interval)');
+    debugPrint(' Verification loop started (2s interval)');
   }
 
   void _stopVerificationLoop() {
     _verificationTimer?.cancel();
-    debugPrint('⏹️ Verification loop stopped');
+    debugPrint(' Verification loop stopped');
   }
 
-  // ✅ ASYNC verification - doesn't block YOLO detection
   void _runVerificationAsync() {
     if (_processingVerification) return;
     _processingVerification = true;
@@ -226,7 +223,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
         _updateState(_state.copyWith(processingFace: false));
       }
     }).catchError((e) {
-      debugPrint('❌ Verification error: $e');
+      debugPrint(' Verification error: $e');
       if (mounted) {
         _processingVerification = false;
         _updateState(_state.copyWith(processingFace: false));
@@ -239,7 +236,6 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
     bool streamWasStopped = false;
 
     try {
-      // ✅ Stop stream BRIEFLY to take picture
       if (_camera.controller?.value.isStreamingImages ?? false) {
         await _camera.stopStream();
         streamWasStopped = true;
@@ -251,19 +247,17 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
       shot = await _camera.takePicture();
       _currentFramePath = shot.path;
 
-      // ✅ Resume stream immediately
       if (mounted && _camera.isInitialized) {
         try {
           unawaited(_camera.startStream(_onFrame));
           streamWasStopped = false;
         } catch (e) {
-          debugPrint('⚠️ Restart stream: $e');
+          debugPrint(' Restart stream: $e');
         }
       }
 
       if (!mounted) return;
 
-      // ✅ Face detection (fast - ~200ms)
       List<FaceInfo> faceInfos;
       try {
         faceInfos = await _detector.detectAndCropAllFacesWithDistance(shot.path);
@@ -282,7 +276,6 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
 
       if (!mounted) return;
 
-      // ✅ Filter by distance
       final validFaces = faceInfos
           .where((f) => !f.isTooFar && !f.isTooClose)
           .map((f) => f.croppedFace)
@@ -301,7 +294,6 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
         return;
       }
 
-      // ✅ Parallel verification - run all at once
       final results = _verifier.verifyMultipleFaces(validFaces);
 
       if (!mounted) return;
@@ -309,13 +301,13 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
       await _processVerificationResults(results, shot.path, validFaces);
       _scheduleImageCleanup(shot.path);
     } catch (e, st) {
-      debugPrint('❌ Verification: $e\n$st');
+      debugPrint(' Verification: $e\n$st');
 
       if (streamWasStopped && mounted && _camera.isInitialized) {
         try {
           await _camera.startStream(_onFrame);
         } catch (e2) {
-          debugPrint('⚠️ Force restart failed: $e2');
+          debugPrint('Force restart failed: $e2');
         }
       }
     }
@@ -323,7 +315,6 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
 
   void _startStatusPolling() {
     _statusTimer?.cancel();
-    // ✅ Update UI more frequently to show real-time YOLO + Face sync
     _statusTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
       if (!mounted) return;
 
@@ -334,8 +325,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
         final unknownCount = _lastUnknownCount;
         final hasSmoking = _multi.lastResult.smokingDetected;
 
-        // ✅ GROUP LOGIC: YOLO detects + Face verified = ALERT
-        final isGroup = yoloPeopleCount >= 1 && verifiedPeopleCount >= 1;
+        final isGroup = yoloPeopleCount >= 3 && verifiedPeopleCount >= 3;
 
         _updateState(_state.copyWith(
           yoloPeopleCount: yoloPeopleCount,
@@ -355,7 +345,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
           hasSmoking,
         );
       } catch (e) {
-        debugPrint('⚠️ Polling error: $e');
+        debugPrint(' Polling error: $e');
       }
     });
   }
@@ -386,11 +376,10 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
     final lensName =
         _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
 
-    // ✅ GROUP ALERT: YOLO + Face verified (with rate limiting)
     if (isGroup && !_lastGroupState) {
       final now = DateTime.now();
       if (now.difference(_lastGroupAlertTime).inSeconds >= 5) {
-        debugPrint('🚨 GROUP ALERT: YOLO($yoloPeopleCount) + FACE($verifiedPeopleCount)');
+        debugPrint(' GROUP ALERT: YOLO($yoloPeopleCount) + FACE($verifiedPeopleCount)');
 
         if (_currentFramePath != null) {
           _saveGroupAlert(verifiedPeopleCount, knownCount, unknownCount, lensName);
@@ -403,7 +392,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
 
     // ✅ SMOKING ALERT
     if (hasSmoking && !_lastSmokeState) {
-      debugPrint('🚨 SMOKING ALERT');
+      debugPrint(' SMOKING ALERT');
 
       if (_currentFramePath != null) {
         _saveSmokingAlert(lensName);
@@ -432,10 +421,10 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
           imageUrl = result['remote'];
 
           if (imageUrl != null) {
-            debugPrint('✅ Group image uploaded');
+            debugPrint('Group image uploaded');
           }
         } catch (uploadError) {
-          debugPrint('⚠️ Upload failed, continuing');
+          debugPrint(' Upload failed, continuing');
         }
       }
 
@@ -450,9 +439,9 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
         locationName: _formatLocation(position),
       );
 
-      debugPrint('✅ Group alert saved to Firebase');
+      debugPrint('Group alert saved to Firebase');
     } catch (e, st) {
-      debugPrint('❌ Group alert: $e\n$st');
+      debugPrint(' Group alert: $e\n$st');
     }
   }
 
@@ -471,10 +460,10 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
           imageUrl = result['remote'];
 
           if (imageUrl != null) {
-            debugPrint('✅ Smoking image uploaded');
+            debugPrint('Smoking image uploaded');
           }
         } catch (uploadError) {
-          debugPrint('⚠️ Upload failed, continuing');
+          debugPrint(' Upload failed, continuing');
         }
       }
 
@@ -488,15 +477,15 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
         locationName: _formatLocation(position),
       );
 
-      debugPrint('✅ Smoking alert saved');
+      debugPrint('Smoking alert saved');
     } catch (e, st) {
-      debugPrint('❌ Smoking alert: $e\n$st');
+      debugPrint(' Smoking alert: $e\n$st');
     }
   }
 
   void _onFrame(CameraImage image) {
     if (!_multi.isInitialized || !mounted) return;
-    _multi.detectAllAsync(image); // ✅ YOLO runs independently on every frame
+    _multi.detectAllAsync(image);
   }
 
   void _scheduleImageCleanup(String imagePath) {
@@ -529,7 +518,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
                   _verificationCacheDuration;
 
           if (!isRecent) {
-            debugPrint('✅ KNOWN: $name');
+            debugPrint(' KNOWN: $name');
           }
 
           _recentlyVerified[name] = DateTime.now();
@@ -537,7 +526,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
         } else {
           unknownCount++;
           hasUnknownFace = true;
-          debugPrint('⚠️ UNKNOWN');
+          debugPrint(' UNKNOWN');
         }
       }
 
@@ -545,7 +534,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
       _lastUnknownCount = unknownCount;
 
       if (hasUnknownFace && unknownCount > 0) {
-        debugPrint('🚨 UNKNOWN FACE: $unknownCount');
+        debugPrint(' UNKNOWN FACE: $unknownCount');
 
         final lensName =
             _camera.lensDirection == CameraLensDirection.front ? 'front' : 'back';
@@ -560,7 +549,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
           );
           frameUrl = result['remote'];
         } catch (e) {
-          debugPrint('⚠️ Frame upload failed');
+          debugPrint(' Frame upload failed');
         }
 
         List<String> faceUrls = [];
@@ -573,7 +562,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
             );
           }
         } catch (e) {
-          debugPrint('⚠️ Face upload failed');
+          debugPrint(' Face upload failed');
         }
 
         await _alertService.createUnknownAlert(
@@ -592,11 +581,11 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
       String statusMsg;
 
       if (knownList.isNotEmpty && unknownCount > 0) {
-        statusMsg = '✅ ${knownList.join(", ")} | ⚠️ $unknownCount unk';
+        statusMsg = ' ${knownList.join(", ")} |  $unknownCount unk';
       } else if (knownList.isNotEmpty) {
-        statusMsg = '✅ ${knownList.join(", ")}';
+        statusMsg = ' ${knownList.join(", ")}';
       } else if (unknownCount > 0) {
-        statusMsg = '⚠️ $unknownCount unknown';
+        statusMsg = '$unknownCount unknown';
       } else {
         statusMsg = 'Scanning...';
       }
@@ -608,13 +597,13 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
         ));
       }
     } catch (e, st) {
-      debugPrint('❌ Process results: $e\n$st');
+      debugPrint('Process results: $e\n$st');
     }
   }
 
   void setAutoVerify(bool enabled) {
     _autoVerify = enabled;
-    debugPrint('🔄 Auto verify: ${enabled ? "ON" : "OFF"}');
+    debugPrint(' Auto verify: ${enabled ? "ON" : "OFF"}');
 
     if (enabled) {
       _startVerificationLoop();
@@ -630,7 +619,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
   }
 
   Future<void> verifyFace() async {
-    debugPrint('🔘 Manual verify');
+    debugPrint(' Manual verify');
     _runVerificationAsync();
   }
 
@@ -671,9 +660,9 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
         }
       }
 
-      debugPrint('📷 Camera switched');
+      debugPrint(' Camera switched');
     } catch (e, st) {
-      debugPrint('❌ Switch failed: $e\n$st');
+      debugPrint(' Switch failed: $e\n$st');
       if (mounted) {
         _updateState(_state.copyWith(faceStatus: 'Switch failed'));
       }
@@ -694,7 +683,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
   Future<void> dispose() async {
     debugPrint('');
     debugPrint('═══════════════════════════════════');
-    debugPrint('🧹 Disposing SurveillanceController');
+    debugPrint(' Disposing SurveillanceController');
     debugPrint('═══════════════════════════════════');
 
     _stopVerificationLoop();
@@ -706,7 +695,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
       await _camera.stopStream();
       await _camera.dispose();
     } catch (e) {
-      debugPrint('⚠️ Camera: $e');
+      debugPrint(' Camera: $e');
     }
 
     try {
@@ -715,7 +704,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
       _multi.dispose();
       await _stateController.close();
     } catch (e) {
-      debugPrint('⚠️ Services: $e');
+      debugPrint(' Services: $e');
     }
 
     _recentlyVerified.clear();
@@ -726,11 +715,10 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
       } catch (_) {}
     }
 
-    debugPrint('✅ Disposed');
+    debugPrint(' Disposed');
     debugPrint('═══════════════════════════════════');
     debugPrint('');
   }
-  // Add to survelliance_controller.dart if missing:
 
 Future<void> pauseForMapTab() async {
   _stopVerificationLoop();
@@ -739,10 +727,10 @@ Future<void> pauseForMapTab() async {
       await _camera.stopStream();
     }
   } catch (e) {
-    debugPrint('⚠️ pauseForMapTab stopStream: $e');
+    debugPrint(' pauseForMapTab stopStream: $e');
   }
   await Future.delayed(const Duration(milliseconds: 280));
-  debugPrint('⏸️ Surveillance paused for map');
+  debugPrint('Surveillance paused for map');
 }
 
 Future<void> resumeFromMapTab() async {
@@ -752,11 +740,11 @@ Future<void> resumeFromMapTab() async {
       await _camera.startStream(_onFrame);
     }
   } catch (e) {
-    debugPrint('⚠️ resumeFromMapTab startStream: $e');
+    debugPrint(' resumeFromMapTab startStream: $e');
   }
   if (_autoVerify && mounted) {
     _startVerificationLoop();
   }
-  debugPrint('▶️ Surveillance resumed');
+  debugPrint(' Surveillance resumed');
 }
 }

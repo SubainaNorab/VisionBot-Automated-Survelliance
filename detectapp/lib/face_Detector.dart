@@ -28,11 +28,10 @@ class FaceInfo {
 class FaceDetectionService {
   final FaceDetector _detector;
 
-  // ✅ UPDATED: Much more relaxed distance thresholds for 4-6 footsteps (2-4 meters)
-  int minFaceWidth = 50;   // Was 100, now 50 (detect from 2x further)
-  int maxFaceWidth = 500;  // Was 400, now 500 (allow closer)
-  int idealMinWidth = 80;  // Was 150, now 80 (better range)
-  int idealMaxWidth = 450; // Was 350, now 450 (wider ideal range)
+  int minFaceWidth = 50;   
+  int maxFaceWidth = 500;  
+  int idealMinWidth = 80;  
+  int idealMaxWidth = 450; 
 
   FaceDetectionService()
     : _detector = FaceDetector(
@@ -41,7 +40,7 @@ class FaceDetectionService {
           enableTracking: false,
           enableLandmarks: false,
           enableContours: false,
-          minFaceSize: 0.05, // ✅ Was 0.08, now 0.05 (detect smaller/further faces - 60% smaller)
+          minFaceSize: 0.05, 
         ),
       );
 
@@ -144,7 +143,7 @@ class FaceDetectionService {
     var faces = await _detector.processImage(input);
 
     if (faces.isEmpty) {
-      print('⚠️ No faces in original image, trying enhanced version...');
+      print(' No faces in original image, trying enhanced version...');
       
       final bytes = await file.readAsBytes();
       var decoded = img.decodeImage(bytes);
@@ -159,7 +158,7 @@ class FaceDetectionService {
         input = InputImage.fromFilePath(tempPath);
         faces = await _detector.processImage(input);
         
-        print('📸 Enhanced detection found ${faces.length} face(s)');
+        print('Enhanced detection found ${faces.length} face(s)');
         
         try {
           await tempFile.delete();
@@ -171,7 +170,7 @@ class FaceDetectionService {
       throw Exception('No face detected in image');
     }
 
-    print('✅ ML Kit detected ${faces.length} face(s)');
+    print(' ML Kit detected ${faces.length} face(s)');
 
     final bytes = await file.readAsBytes();
     final decoded = img.decodeImage(bytes);
@@ -256,16 +255,16 @@ class FaceDetectionService {
 
     if (faceWidth < minFaceWidth) {
       score = 0.0;
-      status = '❌ TOO FAR (${faceWidth}px < ${minFaceWidth}px)';
+      status = ' TOO FAR (${faceWidth}px < ${minFaceWidth}px)';
     } else if (faceWidth > maxFaceWidth) {
       score = 2.0;
-      status = '❌ TOO CLOSE (${faceWidth}px > ${maxFaceWidth}px)';
+      status = ' TOO CLOSE (${faceWidth}px > ${maxFaceWidth}px)';
     } else if (faceWidth >= idealMinWidth && faceWidth <= idealMaxWidth) {
       score = 1.0;
-      status = '✅ PERFECT (${faceWidth}px)';
+      status = ' PERFECT (${faceWidth}px)';
     } else {
       score = 0.5;
-      status = '⚠️ ACCEPTABLE (${faceWidth}px)';
+      status = ' ACCEPTABLE (${faceWidth}px)';
     }
 
     return {

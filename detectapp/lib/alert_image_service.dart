@@ -15,7 +15,7 @@ class AlertImageService {
     try {
       debugPrint('');
       debugPrint('═══════════════════════════════════');
-      debugPrint('📁 Initializing AlertImageService');
+      debugPrint('Initializing AlertImageService');
       debugPrint('═══════════════════════════════════');
 
       final granted = await _requestStoragePermission();
@@ -37,10 +37,10 @@ class AlertImageService {
         await _alertImagesDir!.create(recursive: true);
       }
 
-      debugPrint('📸 Images → ${_alertImagesDir!.path}');
+      debugPrint(' Images → ${_alertImagesDir!.path}');
       debugPrint('═══════════════════════════════════');
     } catch (e) {
-      debugPrint('❌ Init failed: $e');
+      debugPrint(' Init failed: $e');
       rethrow;
     }
   }
@@ -60,9 +60,7 @@ class AlertImageService {
     }
   }
 
-  // =========================================================
-  // 🔥 FIXED: SUPABASE HOOK (RETURN FIXED + SAFE CALL)
-  // =========================================================
+
 
   Future<void> _uploadToSupabaseSafe(
     String localPath,
@@ -88,9 +86,6 @@ class AlertImageService {
     }
   }
 
-  // =========================================================
-  // FIXED: UNKNOWN FACE
-  // =========================================================
 
   Future<String?> saveUnknownFaceImage(
     String sourcePath, {
@@ -109,9 +104,7 @@ class AlertImageService {
     return local;
   }
 
-  // =========================================================
-  // FIXED: GROUP DETECTED
-  // =========================================================
+
 
   Future<String?> saveGroupImage(
     String sourcePath, {
@@ -131,9 +124,7 @@ class AlertImageService {
     return local;
   }
 
-  // =========================================================
-  // FIXED: SMOKING
-  // =========================================================
+ 
 
   Future<String?> saveSmokingImage(
     String sourcePath, {
@@ -152,9 +143,7 @@ class AlertImageService {
     return local;
   }
 
-  // =========================================================
-  // ORIGINAL LOGIC (UNCHANGED)
-  // =========================================================
+  
 
   Future<String?> _saveAlertImage({
     required String sourcePath,

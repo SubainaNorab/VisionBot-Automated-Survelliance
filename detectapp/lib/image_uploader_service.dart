@@ -1,4 +1,3 @@
-// lib/services/image_uploader_service.dart - Upload to Supabase Only
 
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -15,13 +14,13 @@ class ImageUploaderService {
   }) async {
     try {
       debugPrint('');
-      debugPrint('📸 Processing Alert Image');
+      debugPrint('Processing Alert Image');
       debugPrint('─────────────────────────────');
 
       // Verify source file exists
       final sourceFile = File(sourcePath);
       if (!await sourceFile.exists()) {
-        debugPrint('❌ Source file not found');
+        debugPrint(' Source file not found');
         return {'remote': null};
       }
 
@@ -40,7 +39,7 @@ class ImageUploaderService {
       debugPrint('');
 
       // Upload directly to Supabase
-      debugPrint('📤 Uploading to Supabase Storage...');
+      debugPrint(' Uploading to Supabase Storage...');
       
       final supabaseUrl = await SupabaseService.uploadAlertImage(
         localPath: sourcePath,
@@ -55,7 +54,7 @@ class ImageUploaderService {
         'remote': supabaseUrl,
       };
     } catch (e, st) {
-      debugPrint('❌ Error: $e');
+      debugPrint(' Error: $e');
       debugPrint('   Stack: $st');
       return {'remote': null};
     }
@@ -112,23 +111,23 @@ class ImageUploaderService {
 
       // Cleanup temporary files
       debugPrint('');
-      debugPrint('🧹 Cleaning up temp files...');
+      debugPrint(' Cleaning up temp files...');
 
       for (final path in tempPaths) {
         try {
           await File(path).delete();
         } catch (e) {
-          debugPrint('⚠️ Could not delete: $e');
+          debugPrint('Could not delete: $e');
         }
       }
 
       debugPrint('');
       debugPrint('─────────────────────────────');
-      debugPrint('✅ Processed ${uploadedUrls.length} faces');
+      debugPrint(' Processed ${uploadedUrls.length} faces');
 
       return uploadedUrls;
     } catch (e, st) {
-      debugPrint('❌ Error: $e');
+      debugPrint(' Error: $e');
       debugPrint('   Stack: $st');
       return uploadedUrls;
     }

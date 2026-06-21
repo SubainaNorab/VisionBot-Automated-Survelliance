@@ -1,4 +1,4 @@
-// sm_grp.dart - OPTIMIZED: Better performance, caching, smart processing
+//  Better performance, caching, smart processing
 
 import 'dart:async';
 import 'dart:typed_data';
@@ -63,11 +63,11 @@ class MultiDetectorService {
 
   int groupThreshold;
   
-  // ✅ Optimization: Cache frequently accessed values
+  //  Cache frequently accessed values
   late List<List<List<double>>> _cachedInput;
   late List<List<double>> _cachedOutput;
   
-  // ✅ Optimization: Statistics for monitoring
+  //  Statistics for monitoring
   int _totalFramesProcessed = 0;
   int _totalDetectionsFound = 0;
   int _consecutiveNoDetections = 0;
@@ -79,7 +79,7 @@ class MultiDetectorService {
   );
 
   MultiDetectorService({
-    this.groupThreshold = 1,
+    this.groupThreshold = 3,
   });
 
   bool get isInitialized => _isInitialized;
@@ -103,7 +103,7 @@ class MultiDetectorService {
         final inputShape = _yolo!.getInputTensor(0).shape;
         final outputShape = _yolo!.getOutputTensor(0).shape;
         
-        // ✅ Pre-allocate buffers for reuse
+        // Pre-allocate buffers for reuse
         _cachedInput = List.generate(
           1,
           (_) => List.generate(
@@ -117,22 +117,22 @@ class MultiDetectorService {
         debugPrint('   Input: ${inputShape[1]}x${inputShape[2]}x${inputShape[3]}');
         debugPrint('   Output: ${outputShape[1]}x${outputShape[2]}');
         debugPrint('');
-        debugPrint('⚡ Optimizations Enabled:');
+        debugPrint(' Optimizations Enabled:');
         debugPrint('   • Buffer caching (pre-allocated)');
         debugPrint('   • Smart frame skipping');
         debugPrint('   • Confidence: 0.25 (aggressive)');
         debugPrint('   • Min size: 40px (relaxed)');
       } catch (e) {
-        debugPrint('❌ YOLO load failed: $e');
+        debugPrint(' YOLO load failed: $e');
         return;
       }
 
       _isInitialized = true;
-      debugPrint('✅ MultiDetectorService ready');
+      debugPrint(' MultiDetectorService ready');
       debugPrint('═══════════════════════════════════');
       debugPrint('');
     } catch (e) {
-      debugPrint('❌ Init failed: $e');
+      debugPrint(' Init failed: $e');
     }
   }
 
@@ -148,7 +148,7 @@ class MultiDetectorService {
 
     _frameCount++;
     
-    // ✅ Optimization: Adaptive frame skipping based on detection rate
+    //  Adaptive frame skipping based on detection rate
     final skipRate = _consecutiveNoDetections > 20 ? 5 : 15;
     
     if (_frameCount % skipRate != 0) return;
@@ -171,17 +171,17 @@ class MultiDetectorService {
       if (result.personCount > 0) {
         _totalDetectionsFound++;
         _consecutiveNoDetections = 0;
-        debugPrint('🎯 YOLO: ${result.personCount} person(s) [${result.personConfidences.map((c) => c.toStringAsFixed(2)).join(",")}]');
+        debugPrint(' YOLO: ${result.personCount} person(s) [${result.personConfidences.map((c) => c.toStringAsFixed(2)).join(",")}]');
       } else {
         _consecutiveNoDetections++;
         if (_totalFramesProcessed % 15 == 0) {
-          debugPrint('❌ No detection (streak: $_consecutiveNoDetections)');
+          debugPrint(' No detection (streak: $_consecutiveNoDetections)');
         }
       }
       _last = result;
       _busy = false;
     }).catchError((e) {
-      debugPrint('❌ YOLO error: $e');
+      debugPrint(' YOLO error: $e');
       _busy = false;
     });
   }
@@ -189,7 +189,7 @@ class MultiDetectorService {
   void dispose() {
     _yolo?.close();
     _isInitialized = false;
-    debugPrint('✅ YOLO Stats: $_totalFramesProcessed frames, $_totalDetectionsFound detections');
+    debugPrint(' YOLO Stats: $_totalFramesProcessed frames, $_totalDetectionsFound detections');
   }
 }
 
@@ -202,7 +202,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
 
     const int inputSize = 640;
     
-    // ✅ Optimization: Pre-allocated buffer
+    //  Optimization: Pre-allocated buffer
     final input = List.generate(
       1,
       (_) => List.generate(
@@ -211,7 +211,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
       ),
     );
 
-    // ✅ Optimization: Vectorized YUV to RGB (process multiple pixels)
+    //  Optimization: Vectorized YUV to RGB (process multiple pixels)
     for (int y = 0; y < inputSize; y++) {
       final srcY = (y * data.height ~/ inputSize).clamp(0, data.height - 1);
       
@@ -226,7 +226,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
           final U = data.uPlane[uvIndex];
           final V = data.vPlane[uvIndex];
 
-          // ✅ Fast YUV to RGB
+          // Fast YUV to RGB
           final r = ((Y + ((1436 * (V - 128)) >> 10)).clamp(0, 255)) / 255.0;
           final g = ((Y - ((354 * (U - 128) + 732 * (V - 128)) >> 10)).clamp(0, 255)) / 255.0;
           final b = ((Y + ((1814 * (U - 128)) >> 10)).clamp(0, 255)) / 255.0;
@@ -258,7 +258,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
       personConfidences: confidences,
     );
   } catch (e) {
-    debugPrint('⚠️ Compute error: $e');
+    debugPrint(' Compute error: $e');
     return DetectionResult(
       smokingDetected: false,
       groupDetected: false,
@@ -267,7 +267,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
   }
 }
 
-// ✅ Optimized person counting
+// Optimized person counting
 (int, List<double>) _countPersons(List output) {
   final preds = output[0] as List<List<double>>;
   const int inputSize = 640;
@@ -276,7 +276,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
   final boxes = <_Box>[];
   double maxScore = 0;
 
-  // ✅ Optimization: Single pass to find candidates
+  // Optimization: Single pass to find candidates
   for (int i = 0; i < 8400; i++) {
     final personScore = preds[4][i];
     
@@ -302,7 +302,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
     boxes.add(_Box(cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2, personScore));
   }
 
-  // ✅ NMS optimization
+  //  NMS optimization
   final (count, confidences) = _nms(boxes, 0.5);
   
   return (count, confidences);
