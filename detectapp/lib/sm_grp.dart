@@ -1,4 +1,5 @@
 //  Better performance, caching, smart processing
+//  UPDATED: smoking.tflite added only for smoking detection
 
 import 'dart:async';
 import 'dart:typed_data';
@@ -38,6 +39,10 @@ class _DetectionData {
   final int uvRowStride;
   final int uvPixelStride;
   final Uint8List yoloModelData;
+
+  // ✅ ADDED: smoking model bytes
+  final Uint8List? smokingModelData;
+
   final int groupThreshold;
 
   _DetectionData({
@@ -50,6 +55,7 @@ class _DetectionData {
     required this.uvRowStride,
     required this.uvPixelStride,
     required this.yoloModelData,
+    this.smokingModelData,
     required this.groupThreshold,
   });
 }
@@ -58,15 +64,18 @@ class MultiDetectorService {
   Interpreter? _yolo;
   Uint8List? _yoloModelData;
 
+  // ✅ ADDED: smoking model data
+  Uint8List? _smokingModelData;
+
   bool _isInitialized = false;
   bool _busy = false;
 
   int groupThreshold;
-  
+
   //  Cache frequently accessed values
   late List<List<List<double>>> _cachedInput;
   late List<List<double>> _cachedOutput;
-  
+
   //  Statistics for monitoring
   int _totalFramesProcessed = 0;
   int _totalDetectionsFound = 0;
@@ -95,14 +104,25 @@ class MultiDetectorService {
       final opt = InterpreterOptions()..threads = 2;
 
       try {
-        _yolo = await Interpreter.fromAsset('assets/yolov8n.tflite', options: opt);
-        
+        _yolo =
+            await Interpreter.fromAsset('assets/yolov8n.tflite', options: opt);
+
         final modelFile = await rootBundle.load('assets/yolov8n.tflite');
         _yoloModelData = modelFile.buffer.asUint8List();
-        
+
+        // ✅ ADDED: Load smoking model
+        try {
+          final smokingFile = await rootBundle.load('assets/smoking.tflite');
+          _smokingModelData = smokingFile.buffer.asUint8List();
+          debugPrint('✅ Smoking model loaded (${_smokingModelData!.length} bytes)');
+        } catch (e) {
+          debugPrint('⚠️ Smoking model not loaded: $e');
+          _smokingModelData = null;
+        }
+
         final inputShape = _yolo!.getInputTensor(0).shape;
         final outputShape = _yolo!.getOutputTensor(0).shape;
-        
+
         // Pre-allocate buffers for reuse
         _cachedInput = List.generate(
           1,
@@ -111,8 +131,11 @@ class MultiDetectorService {
             (_) => List.filled(inputShape[2] * 3, 0.0),
           ),
         );
-        _cachedOutput = List.generate(1, (_) => List.filled(outputShape[1] * outputShape[2], 0.0));
-        
+        _cachedOutput = List.generate(
+          1,
+          (_) => List.filled(outputShape[1] * outputShape[2], 0.0),
+        );
+
         debugPrint('✅ YOLO loaded (${_yoloModelData!.length} bytes)');
         debugPrint('   Input: ${inputShape[1]}x${inputShape[2]}x${inputShape[3]}');
         debugPrint('   Output: ${outputShape[1]}x${outputShape[2]}');
@@ -141,43 +164,58 @@ class MultiDetectorService {
   }
 
   int _frameCount = 0;
-  
+
   void detectAllAsync(CameraImage image) {
     if (!_isInitialized || _yoloModelData == null) return;
     if (_busy) return;
 
     _frameCount++;
-    
+
     //  Adaptive frame skipping based on detection rate
     final skipRate = _consecutiveNoDetections > 20 ? 5 : 15;
-    
+
     if (_frameCount % skipRate != 0) return;
 
     _busy = true;
     _totalFramesProcessed++;
 
-    compute(_runDetectionInCompute, _DetectionData(
-      yPlane: image.planes[0].bytes,
-      uPlane: image.planes[1].bytes,
-      vPlane: image.planes[2].bytes,
-      width: image.width,
-      height: image.height,
-      yRowStride: image.planes[0].bytesPerRow,
-      uvRowStride: image.planes[1].bytesPerRow,
-      uvPixelStride: image.planes[1].bytesPerPixel ?? 2,
-      yoloModelData: _yoloModelData!,
-      groupThreshold: groupThreshold,
-    )).then((result) {
+    compute(
+      _runDetectionInCompute,
+      _DetectionData(
+        yPlane: image.planes[0].bytes,
+        uPlane: image.planes[1].bytes,
+        vPlane: image.planes[2].bytes,
+        width: image.width,
+        height: image.height,
+        yRowStride: image.planes[0].bytesPerRow,
+        uvRowStride: image.planes[1].bytesPerRow,
+        uvPixelStride: image.planes[1].bytesPerPixel ?? 2,
+        yoloModelData: _yoloModelData!,
+
+        // ✅ ADDED: pass smoking model
+        smokingModelData: _smokingModelData,
+
+        groupThreshold: groupThreshold,
+      ),
+    ).then((result) {
       if (result.personCount > 0) {
         _totalDetectionsFound++;
         _consecutiveNoDetections = 0;
-        debugPrint(' YOLO: ${result.personCount} person(s) [${result.personConfidences.map((c) => c.toStringAsFixed(2)).join(",")}]');
+        debugPrint(
+          ' YOLO: ${result.personCount} person(s) [${result.personConfidences.map((c) => c.toStringAsFixed(2)).join(",")}]',
+        );
       } else {
         _consecutiveNoDetections++;
         if (_totalFramesProcessed % 15 == 0) {
           debugPrint(' No detection (streak: $_consecutiveNoDetections)');
         }
       }
+
+      // ✅ ADDED: smoking log
+      if (result.smokingDetected) {
+        debugPrint('🚬 Smoking detected');
+      }
+
       _last = result;
       _busy = false;
     }).catchError((e) {
@@ -189,7 +227,9 @@ class MultiDetectorService {
   void dispose() {
     _yolo?.close();
     _isInitialized = false;
-    debugPrint(' YOLO Stats: $_totalFramesProcessed frames, $_totalDetectionsFound detections');
+    debugPrint(
+      ' YOLO Stats: $_totalFramesProcessed frames, $_totalDetectionsFound detections',
+    );
   }
 }
 
@@ -201,7 +241,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
     final interpreter = Interpreter.fromBuffer(data.yoloModelData, options: opt);
 
     const int inputSize = 640;
-    
+
     //  Optimization: Pre-allocated buffer
     final input = List.generate(
       1,
@@ -214,12 +254,13 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
     //  Optimization: Vectorized YUV to RGB (process multiple pixels)
     for (int y = 0; y < inputSize; y++) {
       final srcY = (y * data.height ~/ inputSize).clamp(0, data.height - 1);
-      
+
       for (int x = 0; x < inputSize; x++) {
         final srcX = (x * data.width ~/ inputSize).clamp(0, data.width - 1);
 
         final yIndex = srcY * data.yRowStride + srcX;
-        final uvIndex = (srcY ~/ 2) * data.uvRowStride + (srcX ~/ 2) * data.uvPixelStride;
+        final uvIndex =
+            (srcY ~/ 2) * data.uvRowStride + (srcX ~/ 2) * data.uvPixelStride;
 
         if (yIndex < data.yPlane.length && uvIndex < data.uPlane.length) {
           final Y = data.yPlane[yIndex];
@@ -227,9 +268,14 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
           final V = data.vPlane[uvIndex];
 
           // Fast YUV to RGB
-          final r = ((Y + ((1436 * (V - 128)) >> 10)).clamp(0, 255)) / 255.0;
-          final g = ((Y - ((354 * (U - 128) + 732 * (V - 128)) >> 10)).clamp(0, 255)) / 255.0;
-          final b = ((Y + ((1814 * (U - 128)) >> 10)).clamp(0, 255)) / 255.0;
+          final r =
+              ((Y + ((1436 * (V - 128)) >> 10)).clamp(0, 255)) / 255.0;
+          final g =
+              ((Y - ((354 * (U - 128) + 732 * (V - 128)) >> 10))
+                      .clamp(0, 255)) /
+                  255.0;
+          final b =
+              ((Y + ((1814 * (U - 128)) >> 10)).clamp(0, 255)) / 255.0;
 
           input[0][y][x][0] = r;
           input[0][y][x][1] = g;
@@ -248,11 +294,38 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
 
     final (personCount, confidences) = _countPersons(output);
 
+    // ✅ ADDED: run smoking model
+    bool smokingDetected = false;
+
+    if (data.smokingModelData != null) {
+      Interpreter? smokingInterpreter;
+
+      try {
+        smokingInterpreter =
+            Interpreter.fromBuffer(data.smokingModelData!, options: opt);
+
+        final smokeOutputShape = smokingInterpreter.getOutputTensor(0).shape;
+        final smokeOutput = _createOutputBuffer(smokeOutputShape);
+
+        smokingInterpreter.run(input, smokeOutput);
+
+        smokingDetected = _detectSmokingFromOutput(smokeOutput);
+      } catch (e) {
+        debugPrint(' Smoking compute error: $e');
+        smokingDetected = false;
+      } finally {
+        smokingInterpreter?.close();
+      }
+    }
+
     final endTime = DateTime.now().millisecondsSinceEpoch;
 
     return DetectionResult(
-      smokingDetected: false,
+      smokingDetected: smokingDetected,
+
+      // unchanged
       groupDetected: false,
+
       personCount: personCount,
       processingTimeMs: endTime - startTime,
       personConfidences: confidences,
@@ -267,6 +340,128 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
   }
 }
 
+// ✅ ADDED: dynamic output buffer for smoking model
+dynamic _createOutputBuffer(List<int> shape) {
+  if (shape.length == 1) {
+    return List.filled(shape[0], 0.0);
+  }
+
+  if (shape.length == 2) {
+    return List.generate(
+      shape[0],
+      (_) => List.filled(shape[1], 0.0),
+    );
+  }
+
+  if (shape.length == 3) {
+    return List.generate(
+      shape[0],
+      (_) => List.generate(
+        shape[1],
+        (_) => List.filled(shape[2], 0.0),
+      ),
+    );
+  }
+
+  if (shape.length == 4) {
+    return List.generate(
+      shape[0],
+      (_) => List.generate(
+        shape[1],
+        (_) => List.generate(
+          shape[2],
+          (_) => List.filled(shape[3], 0.0),
+        ),
+      ),
+    );
+  }
+
+  throw UnsupportedError('Unsupported output shape: $shape');
+}
+
+// ✅ ADDED: smoking detection parser
+bool _detectSmokingFromOutput(dynamic output) {
+  const double confidenceThreshold = 0.30;
+
+  try {
+    final scores = _extractScores(output);
+
+    for (final score in scores) {
+      if (score >= confidenceThreshold) {
+        return true;
+      }
+    }
+  } catch (e) {
+    debugPrint(' Smoking parse error: $e');
+  }
+
+  return false;
+}
+
+// ✅ ADDED: supports YOLO-style output [1, 5, 8400] or [1, 8400, 5]
+List<double> _extractScores(dynamic output) {
+  final scores = <double>[];
+
+  if (output is! List || output.isEmpty) return scores;
+
+  final first = output[0];
+
+  // Classification style: [1, N]
+  if (first is List && first.isNotEmpty && first[0] is num) {
+    if (first.length == 1) {
+      scores.add((first[0] as num).toDouble());
+    } else {
+      // For binary classification, assume last score is smoking class
+      scores.add((first.last as num).toDouble());
+    }
+    return scores;
+  }
+
+  // YOLO style: [1, values, boxes] or [1, boxes, values]
+  if (first is List && first.isNotEmpty && first[0] is List) {
+    final preds = first;
+
+    // Format: [values, boxes], example [5, 8400]
+    if (preds.length <= 200 && (preds[0] as List).length > 200) {
+      final valuesCount = preds.length;
+      final boxesCount = (preds[0] as List).length;
+
+      for (int i = 0; i < boxesCount; i++) {
+        double bestScore = 0.0;
+
+        for (int c = 4; c < valuesCount; c++) {
+          final score = ((preds[c] as List)[i] as num).toDouble();
+          if (score > bestScore) bestScore = score;
+        }
+
+        scores.add(bestScore);
+      }
+
+      return scores;
+    }
+
+    // Format: [boxes, values], example [8400, 5]
+    if (preds.length > 200 && (preds[0] as List).length <= 200) {
+      for (final row in preds) {
+        if (row is! List || row.length <= 4) continue;
+
+        double bestScore = 0.0;
+
+        for (int c = 4; c < row.length; c++) {
+          final score = (row[c] as num).toDouble();
+          if (score > bestScore) bestScore = score;
+        }
+
+        scores.add(bestScore);
+      }
+
+      return scores;
+    }
+  }
+
+  return scores;
+}
+
 // Optimized person counting
 (int, List<double>) _countPersons(List output) {
   final preds = output[0] as List<List<double>>;
@@ -279,7 +474,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
   // Optimization: Single pass to find candidates
   for (int i = 0; i < 8400; i++) {
     final personScore = preds[4][i];
-    
+
     if (personScore > maxScore) maxScore = personScore;
     if (personScore < confidenceThreshold) continue;
 
@@ -299,12 +494,20 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
     // Filter small boxes
     if (bh < 40 || bw < 20) continue;
 
-    boxes.add(_Box(cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2, personScore));
+    boxes.add(
+      _Box(
+        cx - bw / 2,
+        cy - bh / 2,
+        cx + bw / 2,
+        cy + bh / 2,
+        personScore,
+      ),
+    );
   }
 
   //  NMS optimization
   final (count, confidences) = _nms(boxes, 0.5);
-  
+
   return (count, confidences);
 }
 
@@ -314,7 +517,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
 
   final kept = <_Box>[];
   final confidences = <double>[];
-  
+
   for (final b in boxes) {
     bool overlap = false;
     for (final k in kept) {
@@ -328,7 +531,7 @@ Future<DetectionResult> _runDetectionInCompute(_DetectionData data) async {
       confidences.add(b.score);
     }
   }
-  
+
   return (kept.length, confidences);
 }
 
