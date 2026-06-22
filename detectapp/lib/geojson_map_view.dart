@@ -13,14 +13,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'ble_navigation_service.dart';
 import 'navigation_state.dart';
 import 'path_tracker.dart';
 import 'firestore_command_listener.dart';
 
 class GeoJSONMapView extends StatefulWidget {
-  const GeoJSONMapView({super.key});
+  const GeoJSONMapView({Key? key}) : super(key: key);
 
   @override
   State<GeoJSONMapView> createState() => _GeoJSONMapViewState();
@@ -28,15 +27,12 @@ class GeoJSONMapView extends StatefulWidget {
 
 class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   // ── Map data ───────────────────────────────────────────────────────────────
-  late List<LatLng> pathCoordinates;
-  late List<List<LatLng>> boundaryPolygons;
-  final Set<Polyline> polylines = <Polyline>{};
-  final Set<Polygon> polygons = <Polygon>{};
-  late Set<Marker> markers;
+  List<LatLng> pathCoordinates = [];
+  List<List<LatLng>> boundaryPolygons = [];
+  final Set<Polyline> polylines = {};
+  final Set<Polygon> polygons = {};
+  Set<Marker> markers = {};
   GoogleMapController? _mapController;
-
-  // ── Firestore ─────────────────────────────────────────────────────────────
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   // ── BLE ────────────────────────────────────────────────────────────────────
   final BleNavigationService _ble = BleNavigationService();
@@ -52,20 +48,6 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   // ── Turn state ─────────────────────────────────────────────────────────────
   bool _isTurning = false;
   int _currentWaypointIndex = 0;
-  // ── Command sending ────────────────────────────────────────────────────────
-  Future<void> _sendCommand(String cmd) async {
-    try {
-      await _db.collection('ble_commands').add({
-        'command': cmd,
-        'sent_at': FieldValue.serverTimestamp(),
-        'sent_at_client': Timestamp.fromDate(DateTime.now()),
-        'executed': false,
-      });
-      debugPrint('[Firestore] Command sent: $cmd');
-    } catch (e) {
-      debugPrint('[Firestore] Error sending command: $e');
-    }
-  }
 
   // ── Path tracking ──────────────────────────────────────────────────────────
   PathTracker? _pathTracker;
@@ -96,17 +78,9 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   @override
   void initState() {
     super.initState();
-    pathCoordinates = <LatLng>[];
-    boundaryPolygons = <List<LatLng>>[];
-    markers = <Marker>{};
     _loadGeoJSON();
     _setupBleListeners();
     _firestoreListener = FirestoreCommandListener(_ble);
-    _firestoreListener!.onUserAppCommand = () {
-  setState(() {
-    _lastUserAppCommandAt = DateTime.now();
-  });
-};
     _firestoreListener!.start();
   }
 
@@ -120,22 +94,15 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   }
 
   // ── BLE listeners ──────────────────────────────────────────────────────────
-  bool _emergencyLatched = false;
-  DateTime _lastUserAppCommandAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   void _setupBleListeners() {
     _ble.statusStream.listen((status) {
       _firestoreListener?.updateObstacleStatus(status);
       _updateState(_navState.copyWith(carStatus: status));
-      if (status == 'CLEAR' && _navState.patrolActive && 
-        !_isTurning && !_emergencyLatched) {
-        final msSinceUserCmd = DateTime.now()
-        .difference(_lastUserAppCommandAt).inMilliseconds;
-          if (msSinceUserCmd > 3000) {
-            _sendCommand('F');
-            _ble.sendCommand('F');
-          }
-    }
-  });
+      if (status == 'CLEAR' && _navState.patrolActive && !_isTurning) {
+        _ble.sendCommand('F');
+      }
+    });
 
     _ble.connectionStream.listen((connected) {
       _updateState(_navState.copyWith(
@@ -222,9 +189,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
     final now = DateTime.now();
     if (now.difference(_lastCorrectionTime).inMilliseconds <
-        _correctionCooldownMs) {
-      return;
-    }
+        _correctionCooldownMs) return;
 
     _updateState(_navState.copyWith(
       statusMessage: correction.description,
@@ -265,10 +230,8 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
   Future<void> _executeCorrectionTurn(String dir, int durationMs) async {
     _isTurning = true;
-    await _sendCommand(dir);
     await _ble.sendCommand(dir);
     await Future.delayed(Duration(milliseconds: durationMs));
-    await _sendCommand('F');
     await _ble.sendCommand('F');
     _isTurning = false;
   }
@@ -332,9 +295,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
   double _sqrtManual(double v) {
     if (v <= 0) return 0;
     double x = v;
-    for (int i = 0; i < 16; i++) {
-      x = (x + v / x) / 2;
-    }
+    for (int i = 0; i < 16; i++) x = (x + v / x) / 2;
     return x;
   }
 
@@ -361,10 +322,8 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
       statusMessage: 'Turning ${dir == "L" ? "Left ←" : "Right →"}...',
     ));
 
-    await _sendCommand(dir);
     await _ble.sendCommand(dir);
-    await Future.delayed(const Duration(milliseconds: _turnMs));
-    await _sendCommand('F');
+    await Future.delayed(Duration(milliseconds: _turnMs));
     await _ble.sendCommand('F');
 
     _currentWaypointIndex =
@@ -381,10 +340,8 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
       statusMessage: 'Manual ${dir == "L" ? "Left ←" : "Right →"}',
     ));
 
-    await _sendCommand(dir);
     await _ble.sendCommand(dir);
-    await Future.delayed(const Duration(milliseconds: _turnMs));
-    await _sendCommand('F');
+    await Future.delayed(Duration(milliseconds: _turnMs));
     await _ble.sendCommand('F');
 
     _isTurning = false;
@@ -413,7 +370,7 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
   Future<void> _startPatrol() async {
     if (!_navState.bleConnected) return;
-    _emergencyLatched = false;
+
     _currentWaypointIndex = 0;
     _isTurning = false;
 
@@ -422,7 +379,6 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
       statusMessage: '🚗 Moving forward...',
     ));
 
-    await _sendCommand('F');
     await _ble.sendCommand('F');
     _startGps();
     debugPrint('[NAV] Patrol started');
@@ -432,7 +388,6 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
     _isTurning = false;
     _unlockFromPath();
     _stopGps();
-    await _sendCommand('S');
     await _ble.sendCommand('S');
     _updateState(_navState.copyWith(
       patrolActive: false,
@@ -443,10 +398,8 @@ class _GeoJSONMapViewState extends State<GeoJSONMapView> {
 
   Future<void> _emergencyStop() async {
     _isTurning = false;
-    _emergencyLatched = true;
     _unlockFromPath();
     _stopGps();
-    await _sendCommand('E');
     await _ble.sendCommand('E');
     _updateState(_navState.copyWith(
       patrolActive: false,
@@ -659,34 +612,25 @@ class _OffPathBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Colors.orange.shade800, Colors.orange.shade700],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(12),
+        color: Colors.orange.shade800,
+        borderRadius: BorderRadius.circular(8),
         boxShadow: [
-          BoxShadow(
-            color: Colors.orange.withOpacity(0.4),
-            blurRadius: 8,
-            spreadRadius: 1,
-          ),
+          BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 6),
         ],
       ),
       child: const Row(
         children: [
           Icon(Icons.warning_amber_rounded, color: Colors.white, size: 18),
-          SizedBox(width: 10),
+          SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Car off-path — continuing forward',
+              'Car not on path — continuing forward',
               style: TextStyle(
                 color: Colors.white,
-                fontWeight: FontWeight.w600,
-                fontSize: 12,
-                letterSpacing: 0.3,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
               ),
             ),
           ),
@@ -703,30 +647,8 @@ class _StatusBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            Colors.black.withOpacity(0.92),
-            Colors.black.withOpacity(0.85),
-          ],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-        ),
-        border: Border(
-          top: BorderSide(
-            color: Colors.orange.shade700.withOpacity(0.4),
-            width: 1.5,
-          ),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.5),
-            blurRadius: 10,
-            offset: const Offset(0, -3),
-          ),
-        ],
-      ),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      color: Colors.black87,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -735,34 +657,34 @@ class _StatusBar extends StatelessWidget {
             state.statusMessage,
             style: const TextStyle(
               color: Colors.white,
-              fontWeight: FontWeight.w600,
-              fontSize: 14,
-              letterSpacing: 0.3,
+              fontWeight: FontWeight.bold,
+              fontSize: 13,
             ),
           ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
+          const SizedBox(height: 6),
+          Row(
             children: [
               _Chip(
-                label:
-                    state.bleConnected ? '🔵 BLE Connected' : '⚫ BLE Offline',
+                label: state.bleConnected ? '🔵 BLE' : '⚫ BLE',
                 color: state.bleConnected ? Colors.blue : Colors.grey,
               ),
+              const SizedBox(width: 8),
               _Chip(
                 label: state.patrolActive ? '🟢 RUNNING' : '⏸ IDLE',
                 color: state.patrolActive ? Colors.green : Colors.grey,
               ),
+              const SizedBox(width: 8),
               _Chip(
                 label: state.carStatus == 'BLOCKED' ? '🚫 BLOCKED' : '✅ CLEAR',
                 color: state.carStatus == 'BLOCKED' ? Colors.red : Colors.green,
               ),
-              if (state.distToWaypoint != null)
+              if (state.distToWaypoint != null) ...[
+                const SizedBox(width: 8),
                 _Chip(
                   label: '📍 ${state.distToWaypoint!.toStringAsFixed(1)}m',
                   color: Colors.orange,
                 ),
+              ],
             ],
           ),
         ],
@@ -779,29 +701,18 @@ class _Chip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: color.withOpacity(0.6),
-          width: 1,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: color.withOpacity(0.15),
-            blurRadius: 2,
-            spreadRadius: 0,
-          ),
-        ],
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color, width: 1),
       ),
       child: Text(
         label,
         style: TextStyle(
           color: color,
           fontSize: 11,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.3,
+          fontWeight: FontWeight.bold,
         ),
       ),
     );
@@ -932,35 +843,24 @@ class _RoundButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isEnabled = onPressed != null;
-    final bgColor = isEnabled ? color : Colors.grey.shade800;
-    final iconCol =
-        iconColor ?? (isEnabled ? Colors.white : Colors.grey.shade600);
-
     if (small) {
       return FloatingActionButton.small(
         heroTag: tooltip,
         onPressed: onPressed,
-        backgroundColor: bgColor,
-        elevation: isEnabled ? 4 : 0,
+        backgroundColor: onPressed == null ? Colors.grey.shade800 : color,
         tooltip: tooltip,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Icon(icon, color: iconCol, size: 20),
+        child: Icon(icon,
+            color:
+                iconColor ?? (onPressed == null ? Colors.grey : Colors.white)),
       );
     }
-
     return FloatingActionButton(
       heroTag: tooltip,
       onPressed: onPressed,
-      backgroundColor: bgColor,
-      elevation: isEnabled ? 6 : 1,
+      backgroundColor: onPressed == null ? Colors.grey.shade800 : color,
       tooltip: tooltip,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Icon(icon, color: iconCol, size: 26),
+      child: Icon(icon,
+          color: iconColor ?? (onPressed == null ? Colors.grey : Colors.white)),
     );
   }
 }
