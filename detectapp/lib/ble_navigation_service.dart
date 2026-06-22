@@ -177,7 +177,7 @@ class BleNavigationService {
       if (isConnected) {
         try {
           // Write with response=false; won't move the car but keeps link alive
-          await _rxChar!.write(utf8.encode('S'), withoutResponse: false);
+          await _rxChar!.write(utf8.encode('P'), withoutResponse: true);
           debugPrint('[BLE] Keepalive ping sent');
         } catch (e) {
           debugPrint('[BLE] Keepalive failed: $e');
@@ -190,6 +190,8 @@ class BleNavigationService {
     _keepaliveTimer?.cancel();
     _keepaliveTimer = null;
   }
+  void pauseKeepalive() => _stopKeepalive();
+  void resumeKeepalive() { if (isConnected) _startKeepalive(); }
 
   // ── Auto-reconnect ────────────────────────────────────────────────────────
 

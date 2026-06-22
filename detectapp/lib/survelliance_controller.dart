@@ -232,6 +232,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
   }
 
   Future<void> _runVerificationInternal() async {
+    if (!mounted || !_camera.isInitialized) return;
     XFile? shot;
     bool streamWasStopped = false;
 
@@ -636,7 +637,9 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
         await Future.delayed(const Duration(milliseconds: 100));
       }
 
+      await Future.delayed(const Duration(milliseconds: 250));
       await _camera.switchCamera();
+      await Future.delayed(const Duration(milliseconds: 150));
 
       if (mounted && _camera.isInitialized) {
         await _camera.startStream(_onFrame);
@@ -722,6 +725,7 @@ final Duration _verificationCacheDuration = Duration(seconds: 30);
 
 Future<void> pauseForMapTab() async {
   _stopVerificationLoop();
+  _processingVerification = false;       // drop any in-flight verification
   try {
     if (_camera.controller?.value.isStreamingImages ?? false) {
       await _camera.stopStream();
@@ -729,7 +733,7 @@ Future<void> pauseForMapTab() async {
   } catch (e) {
     debugPrint(' pauseForMapTab stopStream: $e');
   }
-  await Future.delayed(const Duration(milliseconds: 280));
+  await Future.delayed(const Duration(milliseconds: 350)); // was 280
   debugPrint('Surveillance paused for map');
 }
 
